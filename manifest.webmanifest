@@ -6,6 +6,6 @@
   "display": "standalone",
   "background_color": "#f3f6fb",
   "theme_color": "#0f172a",
-  "description": "Fast photo-based physical verification capture and Excel reporting.",
+  "description": "Fast iPhone photo-based physical verification with 30-day local history, team tabs, AI multi-asset detection and Excel reporting.",
   "icons": [{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
 }

@@ -1,17 +1,44 @@
-# PV Capture — Physical Verification App
+# PV Capture — Physical Verification App v3
 
-A minimal iPhone-friendly PWA for photo-based physical verification.
+An iPhone-friendly PWA for fast photo-based fixed-asset physical verification with AI-assisted multi-asset detection and Excel reporting.
 
-## What it does
-- City, Area, Building and Floor are sticky: enter once and they remain until changed.
-- Tap **Take Asset Photo** to open the rear camera on iPhone.
-- After each photo enter: Room Number, Sub-location, Asset Name, Quantity, Serial Number (optional), and select who clicked it from a 3-member team.
-- Date and time are captured automatically in `dd/mm/yyyy` and `hh:mm:ss`.
-- Records and photos are stored locally in the browser using IndexedDB.
-- **Export Excel** creates an `.xlsx` file containing the photo in each row plus all captured fields.
-- On iPhone the Excel file opens the native Share Sheet where it can be saved to Files, mailed, AirDropped, etc.
+## Capture workflow
 
-## Excel columns
+### Sticky fields — enter once, change only when needed
+1. City
+2. Area
+3. Building
+4. Floor Number
+5. Room Number
+
+### For each photo
+- Take a new photo with the rear camera **or upload from the iPhone gallery**.
+- Date and time are captured automatically.
+- Enter Sub-location.
+- Select which of the 3 team members clicked the photo.
+- Add optional Remarks.
+- AI can automatically detect multiple asset types and quantities from one photo.
+- Every AI-created asset row is editable.
+- You can add/delete asset rows manually.
+- Each asset row includes:
+  - Name of Asset
+  - Quantity
+  - Serial Number
+  - Barcode / Asset Tag
+  - Condition: Good / Fair / Poor / Damaged / Under Repair
+  - Not Found Reason: Missing / Disposed / Transferred / Stolen / Under Maintenance / Not applicable
+
+Example: a cabin photo showing 3 chairs, 1 PC, 1 table and 1 AC can produce four editable rows automatically.
+
+## Crash / refresh protection
+- Photos and records are saved in IndexedDB on the device before Excel export.
+- Saved records are grouped under **All + one tab for each team member**.
+- Records older than **30 days** are automatically deleted when the app opens.
+- The app requests persistent browser storage when iOS/browser support allows it.
+- Because website storage is still controlled by iOS, periodically export important work during very large verification exercises.
+
+## Excel output
+The Excel export contains:
 1. Sr No
 2. Photo
 3. City
@@ -23,24 +50,29 @@ A minimal iPhone-friendly PWA for photo-based physical verification.
 9. Name of Asset
 10. Quantity
 11. Serial Number
-12. Clicked By
-13. Date
-14. Time
+12. Barcode / Asset Tag
+13. Condition
+14. Not Found Reason
+15. Remarks
+16. Clicked By
+17. Date
+18. Time
 
-## Deploy for iPhone
-This is a static web app. Host this folder on any HTTPS host (Netlify, Vercel, GitHub Pages, Cloudflare Pages, etc.). HTTPS is recommended for iPhone/PWA use.
+If one photo contains several asset types, the Excel contains one row per asset type while the photo is shown once for that photo group.
 
-After deployment:
-1. Open the HTTPS URL in **Safari** on iPhone.
-2. Tap **Share**.
-3. Tap **Add to Home Screen**.
-4. Launch **PV Capture** from the Home Screen.
-5. Open Settings and enter the three team-member names.
-6. Enter the fixed City / Area / Building / Floor.
-7. Start taking asset photos.
+If a team-member tab is selected, **Export Excel** exports only that member's stored photos. The All tab exports everybody.
 
-## Important operational note
-The app stores photos locally on the iPhone/browser until you export or delete them. iOS may clear website data under storage pressure, so export the Excel periodically during a long verification exercise.
+## AI architecture
+Do not place your OpenAI API key in GitHub Pages. The public PWA sends a compressed photo to the included Cloudflare Worker, and the Worker securely calls OpenAI. See `AI_SETUP.md`.
 
-## Excel library
-Excel export uses ExcelJS loaded from unpkg.com. Once loaded, the service worker attempts to cache it for later use. If Excel export says the library is unavailable, connect to the internet and reopen the app once.
+## Updating an existing GitHub Pages installation
+Replace these files in the repository root:
+- `index.html`
+- `app.js`
+- `styles.css`
+- `sw.js`
+
+Also replace the code in your Cloudflare Worker with:
+- `cloudflare-worker/worker.js`
+
+Existing saved records remain compatible; older single-asset records are automatically displayed as one asset row.

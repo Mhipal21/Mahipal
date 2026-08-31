@@ -28,7 +28,7 @@
         <div class="section-title-row">
           <div>
             <h2>Fixed Location</h2>
-            <p>These 4 fields stay the same until you change them.</p>
+            <p>These 5 fields stay the same for every photo until you change them.</p>
           </div>
           <span class="pill">Sticky</span>
         </div>
@@ -37,22 +37,34 @@
           <label>Area<input id="area" autocomplete="off" placeholder="e.g. Prahladnagar" /></label>
           <label>Building<input id="building" autocomplete="off" placeholder="e.g. Main Hospital" /></label>
           <label>Floor Number<input id="floor" autocomplete="off" inputmode="text" placeholder="e.g. 2 / Ground" /></label>
+          <label class="full-grid">Room Number<input id="roomFixed" autocomplete="off" placeholder="e.g. Cabin 204 / Ward 3" /></label>
         </div>
       </section>
 
       <section class="capture-panel">
         <input id="cameraInput" type="file" accept="image/*" capture="environment" hidden />
-        <button id="takePhotoBtn" class="primary big-camera">📷 Take Asset Photo</button>
-        <p class="hint">After the photo, only asset-specific fields are required.</p>
+        <input id="galleryInput" type="file" accept="image/*" hidden />
+        <div class="capture-buttons">
+          <button id="takePhotoBtn" class="primary big-camera">📷 Take Photo</button>
+          <button id="uploadPhotoBtn" class="secondary big-camera">▣ Upload from Gallery</button>
+        </div>
+        <p class="hint">AI can detect multiple visible assets and quantities. Every AI result remains editable.</p>
       </section>
 
       <section class="summary-row">
-        <div class="summary-card"><span id="recordCount">0</span><small>Photos saved</small></div>
+        <div class="summary-card"><span id="recordCount">0</span><small>Photos stored</small></div>
         <button id="exportBtn" class="success">Export Excel</button>
       </section>
 
       <section class="card">
-        <div class="section-title-row"><h2>Captured Assets</h2><button id="clearAllBtn" class="text-danger">Clear all</button></div>
+        <div class="section-title-row records-head">
+          <div>
+            <h2>Saved Verification Photos</h2>
+            <p id="retentionNote">Stored on this device for 30 days, grouped by team member.</p>
+          </div>
+          <button id="clearAllBtn" class="text-danger">Clear all</button>
+        </div>
+        <div id="teamTabs" class="tabs"></div>
         <div id="emptyState" class="empty">No asset photos captured yet.</div>
         <div id="recordList" class="record-list"></div>
       </section>
@@ -62,49 +74,71 @@
   <div id="detailModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-sheet">
       <div class="modal-head">
-        <div><div class="eyebrow">NEW ASSET</div><h2>Add photo details</h2></div>
+        <div><div class="eyebrow">NEW VERIFICATION PHOTO</div><h2>Add photo details</h2></div>
         <button id="discardBtn" class="icon-btn" aria-label="Discard">✕</button>
       </div>
       <img id="preview" class="preview" alt="Captured asset" />
       <div class="timestamp-box"><span id="capturedDate"></span><strong id="capturedTime"></strong></div>
+      <div class="location-snapshot" id="locationSnapshot"></div>
+
       <div class="form-stack">
-        <label>Room Number *<input id="room" autocomplete="off" placeholder="Room / cabin / ward no." /></label>
-        <label>Sub-location *<input id="subLocation" autocomplete="off" placeholder="e.g. North wall / Bed 3 / Reception desk" /></label>
-        <label>Name of Asset *<input id="assetName" autocomplete="off" placeholder="e.g. Split AC / Wheelchair" /></label>
-        <div class="grid two">
-          <label>Quantity *<input id="quantity" type="number" min="1" step="1" inputmode="numeric" value="1" /></label>
-          <label>Serial Number<input id="serialNumber" autocomplete="off" placeholder="Optional" /></label>
-        </div>
+        <label>Sub-location *<input id="subLocation" autocomplete="off" placeholder="e.g. North wall / Reception desk / Cabin corner" /></label>
         <label>Photo Clicked By *<select id="clickedBy"><option value="">Select team member</option></select></label>
+        <label>Remarks<textarea id="remarks" rows="3" placeholder="Optional remarks for this photo"></textarea></label>
       </div>
-      <button id="saveRecordBtn" class="primary full">Save Asset</button>
+
+      <div class="assets-panel">
+        <div class="assets-panel-head">
+          <div>
+            <div class="label-row"><h3>Assets visible in this photo</h3><span id="aiAssetBadge" class="ai-badge hidden">AI</span></div>
+            <span id="aiStatus" class="field-note"></span>
+          </div>
+          <button id="retryAiBtn" class="mini-btn ai-retry hidden" type="button">Retry AI</button>
+        </div>
+        <div id="assetRows" class="asset-rows"></div>
+        <button id="addAssetRowBtn" class="secondary full-inline" type="button">＋ Add Asset Row</button>
+      </div>
+
+      <button id="saveRecordBtn" class="primary full">Save Photo</button>
     </div>
   </div>
 
   <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-sheet small-sheet">
-      <div class="modal-head"><div><div class="eyebrow">SETTINGS</div><h2>3-member team</h2></div><button id="closeSettingsBtn" class="icon-btn">✕</button></div>
-      <p class="muted">Enter the three names once. Each asset photo will ask you to select who clicked it.</p>
+      <div class="modal-head"><div><div class="eyebrow">SETTINGS</div><h2>Team & AI</h2></div><button id="closeSettingsBtn" class="icon-btn">✕</button></div>
+      <p class="muted">Enter the three team names once. Photos are retained locally for 30 days.</p>
       <div class="form-stack">
         <label>Member 1<input id="member1" autocomplete="off" placeholder="Name" /></label>
         <label>Member 2<input id="member2" autocomplete="off" placeholder="Name" /></label>
         <label>Member 3<input id="member3" autocomplete="off" placeholder="Name" /></label>
+        <div class="settings-divider"></div>
+        <label class="toggle-row">
+          <span><strong>AI multi-asset detection</strong><small>Detect asset names and quantities automatically from each photo.</small></span>
+          <input id="aiEnabled" type="checkbox" />
+        </label>
+        <label>AI Server URL<input id="aiEndpoint" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://your-worker.workers.dev" /></label>
+        <p class="security-note">Do not paste an OpenAI API key here. The key belongs only on the secure server.</p>
       </div>
-      <button id="saveSettingsBtn" class="primary full">Save Team</button>
-      <div class="ios-tip"><strong>Install on iPhone:</strong> open this site in Safari → Share → Add to Home Screen.</div>
+      <button id="saveSettingsBtn" class="primary full">Save Settings</button>
+      <div class="ios-tip"><strong>Install on iPhone:</strong> Safari → Share → Add to Home Screen. The app requests persistent browser storage when supported.</div>
     </div>
   </div>
 
   <div id="editModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-sheet">
-      <div class="modal-head"><div><div class="eyebrow">EDIT ASSET</div><h2>Edit saved details</h2></div><button id="closeEditBtn" class="icon-btn">✕</button></div>
+      <div class="modal-head"><div><div class="eyebrow">EDIT PHOTO</div><h2>Edit saved verification</h2></div><button id="closeEditBtn" class="icon-btn">✕</button></div>
       <img id="editPreview" class="preview" alt="Asset" />
       <div class="form-stack">
-        <label>Room Number *<input id="editRoom" /></label>
-        <label>Sub-location *<input id="editSubLocation" /></label>
-        <label>Name of Asset *<input id="editAssetName" /></label>
-        <div class="grid two"><label>Quantity *<input id="editQuantity" type="number" min="1" step="1" /></label><label>Serial Number<input id="editSerialNumber" /></label></div>
+        <div class="grid two">
+          <label>Room Number *<input id="editRoom" /></label>
+          <label>Sub-location *<input id="editSubLocation" /></label>
+        </div>
         <label>Photo Clicked By *<select id="editClickedBy"></select></label>
+        <label>Remarks<textarea id="editRemarks" rows="3" placeholder="Optional remarks"></textarea></label>
+      </div>
+      <div class="assets-panel">
+        <div class="assets-panel-head"><h3>Assets in photo</h3><button id="editAddAssetRowBtn" class="mini-btn" type="button">＋ Add</button></div>
+        <div id="editAssetRows" class="asset-rows"></div>
       </div>
       <button id="saveEditBtn" class="primary full">Save Changes</button>
     </div>
