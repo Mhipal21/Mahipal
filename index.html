@@ -20,7 +20,10 @@
         <div class="eyebrow">PHYSICAL VERIFICATION</div>
         <h1>PV Capture</h1>
       </div>
-      <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙︎</button>
+      <div class="topbar-actions">
+        <span id="syncBadge" class="sync-badge syncing">Connecting…</span>
+        <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙︎</button>
+      </div>
     </header>
 
     <main>
@@ -28,7 +31,7 @@
         <div class="section-title-row">
           <div>
             <h2>Fixed Location</h2>
-            <p>These 5 fields stay the same for every photo until you change them.</p>
+            <p>These 5 fields stay the same on this device for every photo until you change them.</p>
           </div>
           <span class="pill">Sticky</span>
         </div>
@@ -48,19 +51,19 @@
           <button id="takePhotoBtn" class="primary big-camera">📷 Take Photo</button>
           <button id="uploadPhotoBtn" class="secondary big-camera">▣ Upload from Gallery</button>
         </div>
-        <p class="hint">AI can detect multiple visible assets and quantities. Every AI result remains editable.</p>
+        <p class="hint">AI detects visible asset types and quantities. Every AI result remains editable.</p>
       </section>
 
       <section class="summary-row">
-        <div class="summary-card"><span id="recordCount">0</span><small>Photos stored</small></div>
+        <div class="summary-card"><span id="recordCount">0</span><small>Shared photos</small></div>
         <button id="exportBtn" class="success">Export Excel</button>
       </section>
 
       <section class="card">
         <div class="section-title-row records-head">
           <div>
-            <h2>Saved Verification Photos</h2>
-            <p id="retentionNote">Stored on this device for 30 days, grouped by team member.</p>
+            <h2>Shared Verification Photos</h2>
+            <p id="retentionNote">Visible to the whole team from the same link and retained for 30 days.</p>
           </div>
           <button id="clearAllBtn" class="text-danger">Clear all</button>
         </div>
@@ -105,8 +108,8 @@
 
   <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-sheet small-sheet">
-      <div class="modal-head"><div><div class="eyebrow">SETTINGS</div><h2>Team & AI</h2></div><button id="closeSettingsBtn" class="icon-btn">✕</button></div>
-      <p class="muted">Enter the three team names once. Photos are retained locally for 30 days.</p>
+      <div class="modal-head"><div><div class="eyebrow">SETTINGS</div><h2>Shared Team Settings</h2></div><button id="closeSettingsBtn" class="icon-btn">✕</button></div>
+      <p class="muted">Team names are saved centrally. Set them once and every teammate opening the same app link gets the same tabs automatically.</p>
       <div class="form-stack">
         <label>Member 1<input id="member1" autocomplete="off" placeholder="Name" /></label>
         <label>Member 2<input id="member2" autocomplete="off" placeholder="Name" /></label>
@@ -116,11 +119,11 @@
           <span><strong>AI multi-asset detection</strong><small>Detect asset names and quantities automatically from each photo.</small></span>
           <input id="aiEnabled" type="checkbox" />
         </label>
-        <label>AI Server URL<input id="aiEndpoint" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://your-worker.workers.dev" /></label>
-        <p class="security-note">Do not paste an OpenAI API key here. The key belongs only on the secure server.</p>
+        <div class="cloud-note"><strong>Cloud & AI server:</strong><span id="workerDisplay">Connected automatically</span></div>
+        <p class="security-note">The Worker URL is built into this app. Teammates do not need to paste it on another device.</p>
       </div>
-      <button id="saveSettingsBtn" class="primary full">Save Settings</button>
-      <div class="ios-tip"><strong>Install on iPhone:</strong> Safari → Share → Add to Home Screen. The app requests persistent browser storage when supported.</div>
+      <button id="saveSettingsBtn" class="primary full">Save Team Settings</button>
+      <div class="ios-tip"><strong>Install on iPhone:</strong> Open the same GitHub Pages link in Safari → Share → Add to Home Screen.</div>
     </div>
   </div>
 
