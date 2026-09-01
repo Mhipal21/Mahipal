@@ -1,427 +1,153 @@
 const $ = (id) => document.getElementById(id);
-
-// Same backend for every device. This URL is intentionally not a secret.
 const WORKER_URL = 'https://pv-capture-ai.mahipal-office21.workers.dev';
-const DB_NAME = 'pv-capture-db';
-const STORE = 'records';
-const CONFIG_KEY = 'pv-capture-config-v4';
-const RETENTION_DAYS = 30;
+const SESSION_KEY = 'prs-assetverify-session-v5';
+const STICKY_PREFIX = 'prs-assetverify-sticky-v5-';
 const CONDITIONS = ['Good','Fair','Poor','Damaged','Under Repair'];
+const STATUSES = ['Found','Not Found','Pending'];
 const NOT_FOUND_REASONS = ['','Missing','Disposed','Transferred','Stolen','Under Maintenance'];
+const R2_FREE_BYTES = 10 * 1024 * 1024 * 1024;
 
-let db;
+let session = null;
+let companies = [];
+let records = [];
+let users = [];
+let selectedCompany = null;
 let pendingPhoto = null;
-let editingRef = null;
-let aiRequestSeq = 0;
-let assetRowsTouched = false;
-let activeTeamTab = 'ALL';
-let sharedRecords = [];
-let sharedTeamMembers = [];
-let refreshTimer = null;
+let editingRecord = null;
+let editingUser = null;
+let aiSeq = 0;
+let activeStatus = 'ALL';
 
-function toast(message, ms=2200){
-  const el=$('toast'); el.textContent=message; el.classList.remove('hidden');
-  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.add('hidden'),ms);
-}
-function pad(n){return String(n).padStart(2,'0')}
-function formatDate(d){return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`}
-function formatTime(d){return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`}
+function toast(message, ms=2600){const e=$('toast');e.textContent=message;e.classList.remove('hidden');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.add('hidden'),ms)}
 function escapeHtml(s=''){return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
-function validDate(x){const d=new Date(x);return !Number.isNaN(d.getTime())?d:new Date()}
-function uniqueId(){return (crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2,10)}`)}
-function setSyncBadge(state,text){const b=$('syncBadge');b.className=`sync-badge ${state}`;b.textContent=text}
-function getPin(){return localStorage.getItem('pv-team-pin')||''}
-function apiHeaders(extra={}){const h={'Content-Type':'application/json',...extra};const pin=getPin();if(pin)h['X-Team-Pin']=pin;return h}
+function pad(n){return String(n).padStart(2,'0')}
+function fmtDate(d){d=new Date(d);return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`}
+function fmtTime(d){d=new Date(d);return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`}
+function isoDateInput(d){const x=new Date(d);return `${x.getFullYear()}-${pad(x.getMonth()+1)}-${pad(x.getDate())}`}
+function uid(){return crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}
+function bytesLabel(n){if(n<1024*1024)return `${(n/1024).toFixed(1)} KB`;if(n<1024*1024*1024)return `${(n/1024/1024).toFixed(1)} MB`;return `${(n/1024/1024/1024).toFixed(2)} GB`}
+function isAdmin(){return session?.user?.role==='ADMIN'}
+function authHeaders(body=false){const h={};if(body)h['Content-Type']='application/json';if(session?.token)h.Authorization=`Bearer ${session.token}`;return h}
+async function api(path, options={}){const opts={...options,headers:{...authHeaders(!!options.body),...(options.headers||{})}};const res=await fetch(`${WORKER_URL}${path}`,opts);if(res.status===401&&session){clearSession();showWelcome();toast('Session expired. Please login again.')}return res}
+async function apiJson(path,options={}){const r=await api(path,options);const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`Request failed (${r.status})`);return d}
+function saveSession(){localStorage.setItem(SESSION_KEY,JSON.stringify(session))}
+function clearSession(){session=null;localStorage.removeItem(SESSION_KEY)}
+function loadSession(){try{return JSON.parse(localStorage.getItem(SESSION_KEY)||'null')}catch{return null}}
 
-async function apiFetch(path,options={}){
-  const url=`${WORKER_URL}${path}`;
-  const opts={...options,headers:{...(options.body?apiHeaders():{'X-Team-Pin':getPin()}),...(options.headers||{})}};
-  let res=await fetch(url,opts);
-  if(res.status===401){
-    const pin=prompt('Enter the shared PV team PIN');
-    if(pin){localStorage.setItem('pv-team-pin',pin);opts.headers={...(options.body?apiHeaders():{'X-Team-Pin':pin}),...(options.headers||{})};res=await fetch(url,opts)}
-  }
-  return res;
-}
+const allViews=['welcomeView','createCompanyView','existingCompanyView','verifyView','searchView','usersView','usageView','editCompanyView'];
+function showView(id){allViews.forEach(v=>$(v).classList.toggle('hidden',v!==id));closeDrawer()}
+function showWelcome(){showView('welcomeView');$('menuBtn').classList.add('hidden');$('logoutBtn').classList.add('hidden');$('syncBadge').classList.add('hidden');$('companySubtitle').textContent=''}
+function openDrawer(){$('drawer').classList.remove('hidden');$('drawerBackdrop').classList.remove('hidden')}
+function closeDrawer(){$('drawer').classList.add('hidden');$('drawerBackdrop').classList.add('hidden')}
+function updateShell(){if(!session)return;$('menuBtn').classList.remove('hidden');$('logoutBtn').classList.remove('hidden');$('syncBadge').classList.remove('hidden');$('syncBadge').textContent='Cloud';$('companySubtitle').textContent=session.company.name;$('drawerCompany').textContent=session.company.name;$('drawerUser').textContent=`${session.user.name} · ${session.user.role==='ADMIN'?'Admin':'Verifier'}`;document.querySelectorAll('[data-admin-only]').forEach(e=>e.classList.toggle('hidden',!isAdmin()))}
 
-function openDb(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,1);req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains(STORE))req.result.createObjectStore(STORE,{keyPath:'id',autoIncrement:true})};req.onsuccess=()=>{db=req.result;resolve(db)};req.onerror=()=>reject(req.error)})}
-function storeTx(mode='readonly'){return db.transaction(STORE,mode).objectStore(STORE)}
-function dbAdd(rec){return new Promise((res,rej)=>{const r=storeTx('readwrite').add(rec);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
-function dbPut(rec){return new Promise((res,rej)=>{const r=storeTx('readwrite').put(rec);r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
-function dbDelete(id){return new Promise((res,rej)=>{const r=storeTx('readwrite').delete(id);r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
-function dbClear(){return new Promise((res,rej)=>{const r=storeTx('readwrite').clear();r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
-function dbAllRaw(){return new Promise((res,rej)=>{const r=storeTx().getAll();r.onsuccess=()=>res(r.result.sort((a,b)=>a.id-b.id));r.onerror=()=>rej(r.error)})}
-function dbGet(id){return new Promise((res,rej)=>{const r=storeTx().get(id);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+// ---------- Welcome / company creation ----------
+function createMemberRow(data={},locked=false){const wrap=document.createElement('div');wrap.className='member-row';wrap.innerHTML=`
+  <label>Full Name *<input class="cm-name" value="${escapeHtml(data.name||'')}" placeholder="Member name"></label>
+  <label>Username *<input class="cm-user" value="${escapeHtml(data.username||'')}" autocomplete="off" placeholder="username"></label>
+  <label>Password *<input class="cm-pass" type="password" value="${escapeHtml(data.password||'')}" autocomplete="new-password" placeholder="password"></label>
+  <label>Role / Rights *<select class="cm-role"><option value="ADMIN" ${data.role==='ADMIN'?'selected':''}>Admin</option><option value="VERIFIER" ${data.role==='VERIFIER'?'selected':''}>Verifier</option></select></label>
+  <button class="remove-member" type="button" ${locked?'disabled':''}>✕</button>`;
+  wrap.querySelector('.remove-member').onclick=()=>wrap.remove();return wrap
+}
+function resetCreateCompany(){$('newCompanyName').value='';$('newCompanyStartDate').value=isoDateInput(new Date());$('createMembers').innerHTML='';$('createMembers').appendChild(createMemberRow({role:'ADMIN'},true));$('createMembers').appendChild(createMemberRow({role:'VERIFIER'}))}
+function collectCreateMembers(){return [...$('createMembers').querySelectorAll('.member-row')].map(r=>({name:r.querySelector('.cm-name').value.trim(),username:r.querySelector('.cm-user').value.trim(),password:r.querySelector('.cm-pass').value,role:r.querySelector('.cm-role').value}))}
+$('openCreateCompanyBtn').onclick=()=>{resetCreateCompany();showView('createCompanyView')};
+$('openExistingCompanyBtn').onclick=async()=>{showView('existingCompanyView');await loadCompanies()};
+document.querySelectorAll('[data-back-welcome]').forEach(b=>b.onclick=showWelcome);
+$('addCreateMemberBtn').onclick=()=>$('createMembers').appendChild(createMemberRow({role:'VERIFIER'}));
+$('createCompanyBtn').onclick=async()=>{const name=$('newCompanyName').value.trim(),startDate=$('newCompanyStartDate').value,members=collectCreateMembers();if(!name||!startDate){toast('Company name and start date are required.');return}if(members.length<1||members.some(m=>!m.name||!m.username||!m.password)){toast('Complete name, username and password for every team member.');return}if(!members.some(m=>m.role==='ADMIN')){toast('At least one Admin is required.');return}try{const d=await apiJson('/public/companies',{method:'POST',body:JSON.stringify({name,startDate,members})});session=d.session;saveSession();await enterCompany()}catch(e){toast(e.message,4200)}};
 
-function normalizeAsset(a={}){
-  return {
-    rowId:a.rowId||uniqueId(),
-    assetName:String(a.assetName||a.name||'').trim(),
-    quantity:Math.max(1,Number(a.quantity||1)),
-    serialNumber:String(a.serialNumber||'').trim(),
-    barcode:String(a.barcode||'').trim(),
-    condition:CONDITIONS.includes(a.condition)?a.condition:'Good',
-    notFoundReason:NOT_FOUND_REASONS.includes(a.notFoundReason)?a.notFoundReason:''
-  };
-}
-function normalizeRecord(r={}){
-  const assets = Array.isArray(r.assets) && r.assets.length
-    ? r.assets.map(normalizeAsset)
-    : [normalizeAsset({assetName:r.assetName,quantity:r.quantity,serialNumber:r.serialNumber,condition:r.condition,notFoundReason:r.notFoundReason})];
-  return {
-    ...r,
-    room:String(r.room||'').trim(),
-    subLocation:String(r.subLocation||r.sub_location||'').trim(),
-    clickedBy:String(r.clickedBy||r.clicked_by||'').trim(),
-    remarks:String(r.remarks||'').trim(),
-    city:String(r.city||''),area:String(r.area||''),building:String(r.building||''),floor:String(r.floor||''),
-    assets,
-    capturedAt:r.capturedAt||r.captured_at||new Date().toISOString(),
-    createdAt:r.createdAt||r.created_at||new Date().toISOString(),
-    source:r.source||'camera',
-    remoteId:r.remoteId||r.remote_id||r.id||'',
-    clientId:r.clientId||r.client_id||'',
-    photoUrl:r.photoUrl||r.photo_url||'',
-    appVersion:4
-  };
-}
+async function loadCompanies(){try{const d=await apiJson('/public/companies');companies=d.companies||[];$('companyList').innerHTML=companies.map(c=>`<div class="company-row"><button data-company="${c.id}"><strong>${escapeHtml(c.name)}</strong><span>${escapeHtml(c.code)}</span></button><span class="company-users">${c.userCount} user${c.userCount===1?'':'s'}</span><span class="company-start">Start: ${escapeHtml(c.startDate)}</span><span class="status-active">Active</span></div>`).join('');$('noCompanies').classList.toggle('hidden',companies.length>0);document.querySelectorAll('[data-company]').forEach(b=>b.onclick=()=>openLogin(b.dataset.company))}catch(e){toast(e.message)}}
+function openLogin(id){selectedCompany=companies.find(c=>String(c.id)===String(id));if(!selectedCompany)return;$('loginCompanyName').textContent=selectedCompany.name;$('loginUsername').value='';$('loginPassword').value='';$('loginModal').classList.remove('hidden');setTimeout(()=>$('loginUsername').focus(),120)}
+$('loginBtn').onclick=async()=>{try{const d=await apiJson('/auth/login',{method:'POST',body:JSON.stringify({companyId:selectedCompany.id,username:$('loginUsername').value.trim(),password:$('loginPassword').value})});session=d.session;saveSession();$('loginModal').classList.add('hidden');await enterCompany()}catch(e){toast(e.message,4000)}};
+$('forgotPasswordBtn').onclick=()=>{$('loginModal').classList.add('hidden');$('forgotStep1').classList.remove('hidden');$('forgotStep2').classList.add('hidden');$('forgotUsername').value=$('loginUsername').value.trim();$('forgotModal').classList.remove('hidden')};
+$('sendResetBtn').onclick=async()=>{try{const d=await apiJson('/auth/forgot',{method:'POST',body:JSON.stringify({companyId:selectedCompany.id,username:$('forgotUsername').value.trim()})});$('forgotStep1').classList.add('hidden');$('forgotStep2').classList.remove('hidden');toast(d.emailConfigured?'Reset code sent to recovery email.':'Reset request created, but email delivery is not configured yet.',4500)}catch(e){toast(e.message,4200)}};
+$('resetPasswordBtn').onclick=async()=>{try{await apiJson('/auth/reset',{method:'POST',body:JSON.stringify({companyId:selectedCompany.id,username:$('forgotUsername').value.trim(),code:$('resetCode').value.trim(),newPassword:$('newPassword').value})});$('forgotModal').classList.add('hidden');toast('Password changed. You can login now.');openLogin(selectedCompany.id)}catch(e){toast(e.message,4200)}};
+document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).classList.add('hidden'));
 
-function getConfig(){
-  try{
-    const current=JSON.parse(localStorage.getItem(CONFIG_KEY));
-    if(current) return current;
-    const old3=JSON.parse(localStorage.getItem('pv-capture-config-v3'))||{};
-    const migrated={
-      city:old3.city||'',area:old3.area||'',building:old3.building||'',floor:old3.floor||'',room:old3.room||'',
-      aiEnabled:old3.aiEnabled!==false
-    };
-    localStorage.setItem(CONFIG_KEY,JSON.stringify(migrated));
-    return migrated;
-  }catch{return {aiEnabled:true}}
-}
-function setConfig(patch){const c={...getConfig(),...patch};localStorage.setItem(CONFIG_KEY,JSON.stringify(c));return c}
-function hydrateConfig(){
-  const c=getConfig();
-  ['city','area','building','floor'].forEach(k=>$(k).value=c[k]||'');
-  $('roomFixed').value=c.room||'';
-  $('aiEnabled').checked=c.aiEnabled!==false;
-  $('workerDisplay').textContent=WORKER_URL.replace(/^https?:\/\//,'');
-  refreshMembers();
-}
-function persistFixed(){setConfig({city:$('city').value.trim(),area:$('area').value.trim(),building:$('building').value.trim(),floor:$('floor').value.trim(),room:$('roomFixed').value.trim()})}
-function members(){return sharedTeamMembers.map(x=>(x||'').trim()).filter(Boolean)}
-function refreshMembers(){
-  const m=members();
-  [$('clickedBy'),$('editClickedBy')].forEach(sel=>{
-    const current=sel.value;
-    sel.innerHTML='<option value="">Select team member</option>'+m.map(n=>`<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
-    if(m.includes(current)) sel.value=current;
-  });
-  $('member1').value=m[0]||'';$('member2').value=m[1]||'';$('member3').value=m[2]||'';
-}
+async function restoreSession(){session=loadSession();if(!session){showWelcome();return}try{const d=await apiJson('/auth/me');session={...session,...d.session};saveSession();await enterCompany()}catch{clearSession();showWelcome()}}
+async function enterCompany(){updateShell();loadSticky();await Promise.all([refreshRecords(),refreshUsers()]);showView('verifyView')}
+$('logoutBtn').onclick=async()=>{try{await apiJson('/auth/logout',{method:'POST'})}catch{}clearSession();showWelcome()};
 
-async function loadSharedConfig(){
-  try{
-    const res=await apiFetch('/config');
-    if(!res.ok) throw new Error(`Config ${res.status}`);
-    const data=await res.json();
-    sharedTeamMembers=Array.isArray(data.teamMembers)?data.teamMembers.slice(0,3):[];
-    refreshMembers();
-    return true;
-  }catch(err){console.error(err);return false}
-}
-async function saveSharedConfig(teamMembers){
-  const res=await apiFetch('/config',{method:'PUT',body:JSON.stringify({teamMembers})});
-  const data=await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error(data.error||`Config save ${res.status}`);
-  sharedTeamMembers=data.teamMembers||teamMembers;
-  refreshMembers();
-}
+// ---------- drawer/navigation ----------
+$('menuBtn').onclick=openDrawer;$('drawerBackdrop').onclick=closeDrawer;
+document.querySelectorAll('[data-nav]').forEach(b=>b.onclick=async()=>{const n=b.dataset.nav;if(n==='verify')showView('verifyView');if(n==='search'){showView('searchView');renderSearch()}if(n==='users'){if(!isAdmin())return;showView('usersView');await refreshUsers()}if(n==='usage'){showView('usageView');await loadUsage()}if(n==='editCompany'){if(!isAdmin())return;showView('editCompanyView');fillCompanyEdit()}if(n==='switchCompany'){clearSession();showView('existingCompanyView');$('menuBtn').classList.add('hidden');$('logoutBtn').classList.add('hidden');$('companySubtitle').textContent='';await loadCompanies()}if(n==='welcome'){clearSession();showWelcome()}});
 
-async function fileToJpegDataUrl(file){
-  const src=URL.createObjectURL(file);
-  try{
-    const img=new Image(); await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=src});
-    const max=1440, scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
-    const w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale));
-    const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
-    canvas.getContext('2d').drawImage(img,0,0,w,h);
-    return canvas.toDataURL('image/jpeg',0.74);
-  } finally { URL.revokeObjectURL(src); }
-}
-async function shrinkDataUrlForAi(dataUrl){
-  const img=new Image(); await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=dataUrl});
-  const max=1024, scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
-  const w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale));
-  const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
-  canvas.getContext('2d').drawImage(img,0,0,w,h);
-  return canvas.toDataURL('image/jpeg',0.68);
-}
-async function sourceToDataUrl(src){
-  if(!src) throw new Error('Photo missing');
-  if(src.startsWith('data:image/')) return src;
-  const res=await apiFetch(src.replace(WORKER_URL,''),{method:'GET'});
-  if(!res.ok) throw new Error('Photo download failed');
-  const blob=await res.blob();
-  return await new Promise((resolve,reject)=>{const fr=new FileReader();fr.onload=()=>resolve(fr.result);fr.onerror=reject;fr.readAsDataURL(blob)});
-}
+// ---------- sticky location ----------
+const stickyIds=['city','area','building','floor','room'];
+function stickyKey(){return `${STICKY_PREFIX}${session?.company?.id||'none'}`}
+function loadSticky(){try{const x=JSON.parse(localStorage.getItem(stickyKey())||'{}');stickyIds.forEach(k=>$(k).value=x[k]||'')}catch{}}
+function saveSticky(){const x={};stickyIds.forEach(k=>x[k]=$(k).value.trim());localStorage.setItem(stickyKey(),JSON.stringify(x));return x}
+stickyIds.forEach(k=>$(k).addEventListener('change',saveSticky));
+function fixedValid(){const x=saveSticky();if(stickyIds.some(k=>!x[k])){toast('Complete City, Area, Building, Floor and Room first.');return false}return true}
 
-function fixedLocationValid(){
-  persistFixed(); const c=getConfig();
-  if(!c.city||!c.area||!c.building||!c.floor||!c.room){toast('Fill City, Area, Building, Floor and Room first.');return false}
-  return true;
-}
-function locationSnapshotHtml(){
-  const c=getConfig();
-  return `<strong>${escapeHtml(c.city)}</strong><span>${escapeHtml(c.area)}</span><span>${escapeHtml(c.building)}</span><span>Floor ${escapeHtml(c.floor)}</span><span>Room ${escapeHtml(c.room)}</span>`;
-}
-function conditionOptions(selected='Good'){return CONDITIONS.map(v=>`<option value="${escapeHtml(v)}" ${v===selected?'selected':''}>${escapeHtml(v)}</option>`).join('')}
-function notFoundOptions(selected=''){return NOT_FOUND_REASONS.map(v=>`<option value="${escapeHtml(v)}" ${v===selected?'selected':''}>${v?escapeHtml(v):'Not applicable'}</option>`).join('')}
+// ---------- photos / compression ----------
+function blobToDataUrl(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(blob)})}
+async function loadImage(file){const url=URL.createObjectURL(file);try{const img=new Image();img.decoding='async';await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url});return img}finally{setTimeout(()=>URL.revokeObjectURL(url),1000)}}
+function canvasBlob(canvas,q){return new Promise((res,rej)=>canvas.toBlob(b=>b?res(b):rej(new Error('Image compression failed')),'image/jpeg',q))}
+async function compressPhoto(file){const img=await loadImage(file);let max=1800;let scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));let w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale));for(let pass=0;pass<4;pass++){const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d',{alpha:false}).drawImage(img,0,0,w,h);for(const q of [.84,.76,.68,.6,.52,.44]){const blob=await canvasBlob(c,q);if(blob.size<=1_000_000)return {blob,dataUrl:await blobToDataUrl(blob),size:blob.size}}w=Math.round(w*.82);h=Math.round(h*.82)}const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d',{alpha:false}).drawImage(img,0,0,w,h);const blob=await canvasBlob(c,.4);return {blob,dataUrl:await blobToDataUrl(blob),size:blob.size}}
 
-function assetRowHtml(asset=normalizeAsset(), edit=false){
-  const prefix=edit?'edit-asset-row':'asset-row';
-  return `<div class="asset-row" data-row-id="${escapeHtml(asset.rowId)}">
-    <div class="asset-row-top"><span class="asset-row-label">Asset</span><button type="button" class="row-remove" data-remove-${prefix} aria-label="Remove asset">✕</button></div>
-    <div class="grid two compact-grid">
-      <label class="full-grid">Name of Asset *<input data-field="assetName" autocomplete="off" value="${escapeHtml(asset.assetName)}" placeholder="e.g. Office Chair" /></label>
-      <label>Quantity *<input data-field="quantity" type="number" min="1" step="1" inputmode="numeric" value="${asset.quantity}" /></label>
-      <label>Serial Number<input data-field="serialNumber" autocomplete="off" value="${escapeHtml(asset.serialNumber)}" placeholder="Optional" /></label>
-      <label>Barcode / Asset Tag<input data-field="barcode" autocomplete="off" value="${escapeHtml(asset.barcode||'')}" placeholder="Optional" /></label>
-      <label>Condition<select data-field="condition">${conditionOptions(asset.condition)}</select></label>
-      <label>Not Found Reason<select data-field="notFoundReason">${notFoundOptions(asset.notFoundReason)}</select></label>
-    </div>
-  </div>`;
-}
-function attachAssetRowEvents(container, edit=false){
-  container.querySelectorAll('[data-field]').forEach(el=>{
-    el.addEventListener('input',()=>{if(!edit) assetRowsTouched=true});
-    el.addEventListener('change',()=>{if(!edit) assetRowsTouched=true});
-  });
-  container.querySelectorAll(edit?'[data-remove-edit-asset-row]':'[data-remove-asset-row]').forEach(btn=>{
-    btn.onclick=()=>{const rows=container.querySelectorAll('.asset-row');if(rows.length<=1){toast('Keep at least one asset row.');return}btn.closest('.asset-row').remove();if(!edit)assetRowsTouched=true};
-  });
-}
-function renderAssetRows(assets, edit=false){const container=$(edit?'editAssetRows':'assetRows');const list=(assets&&assets.length?assets:[normalizeAsset()]).map(normalizeAsset);container.innerHTML=list.map(a=>assetRowHtml(a,edit)).join('');attachAssetRowEvents(container,edit)}
-function collectAssetRows(edit=false){
-  const container=$(edit?'editAssetRows':'assetRows');
-  return [...container.querySelectorAll('.asset-row')].map(row=>normalizeAsset({
-    rowId:row.dataset.rowId,assetName:row.querySelector('[data-field="assetName"]').value,quantity:row.querySelector('[data-field="quantity"]').value,
-    serialNumber:row.querySelector('[data-field="serialNumber"]').value,barcode:row.querySelector('[data-field="barcode"]').value,
-    condition:row.querySelector('[data-field="condition"]').value,notFoundReason:row.querySelector('[data-field="notFoundReason"]').value
-  }));
-}
-function assetRowsValid(assets){return assets.length>0 && assets.every(a=>a.assetName && Number(a.quantity)>=1)}
+function assetDefault(){return {rowId:uid(),assetName:'',quantity:1,serialNumber:'',barcode:'',condition:'Good',verificationStatus:'Found',notFoundReason:''}}
+function assetRowHtml(a=assetDefault(),edit=false){const prefix=edit?'e-':'';return `<div class="asset-row" data-row="${escapeHtml(a.rowId||uid())}"><div class="asset-row-grid"><label>Asset Name *<input class="${prefix}asset-name" value="${escapeHtml(a.assetName||'')}"></label><label>Qty *<input class="${prefix}qty" type="number" min="1" value="${Number(a.quantity)||1}"></label><label>Condition<select class="${prefix}condition">${CONDITIONS.map(x=>`<option ${x===a.condition?'selected':''}>${x}</option>`).join('')}</select></label><label>Status<select class="${prefix}status">${STATUSES.map(x=>`<option ${x===a.verificationStatus?'selected':''}>${x}</option>`).join('')}</select></label></div><div class="asset-row-grid secondary-row"><label>Serial Number<input class="${prefix}serial" value="${escapeHtml(a.serialNumber||'')}"></label><label>Barcode / Asset Tag<input class="${prefix}barcode" value="${escapeHtml(a.barcode||'')}"></label><label class="not-found-wrap ${a.verificationStatus==='Not Found'?'':'hidden-field'}">Not Found Reason<select class="${prefix}reason">${NOT_FOUND_REASONS.map(x=>`<option ${x===a.notFoundReason?'selected':''}>${x||'Select reason'}</option>`).join('')}</select></label><button type="button" class="row-remove">Remove</button></div></div>`}
+function wireAssetRows(container,edit=false){container.querySelectorAll('.asset-row').forEach(r=>{const p=edit?'e-':'';const st=r.querySelector(`.${p}status`),wrap=r.querySelector('.not-found-wrap');st.onchange=()=>wrap.classList.toggle('hidden-field',st.value!=='Not Found');r.querySelector('.row-remove').onclick=()=>r.remove()})}
+function renderAssetRows(list,edit=false){const c=$(edit?'editAssetRows':'assetRows');c.innerHTML=(list?.length?list:[assetDefault()]).map(a=>assetRowHtml(a,edit)).join('');wireAssetRows(c,edit)}
+function collectAssetRows(edit=false){const p=edit?'e-':'';return [...$(edit?'editAssetRows':'assetRows').querySelectorAll('.asset-row')].map(r=>({rowId:r.dataset.row||uid(),assetName:r.querySelector(`.${p}asset-name`).value.trim(),quantity:Math.max(1,Number(r.querySelector(`.${p}qty`).value)||1),condition:r.querySelector(`.${p}condition`).value,verificationStatus:r.querySelector(`.${p}status`).value,notFoundReason:r.querySelector(`.${p}reason`).value,serialNumber:r.querySelector(`.${p}serial`).value.trim(),barcode:r.querySelector(`.${p}barcode`).value.trim()}))}
 
-function setAiUi(state,message=''){
-  const badge=$('aiAssetBadge'),retry=$('retryAiBtn'),status=$('aiStatus');
-  badge.classList.toggle('hidden',state!=='done'); retry.classList.toggle('hidden',!['error','done'].includes(state));
-  status.className='field-note'+(state==='loading'?' loading':state==='done'?' success':state==='error'?' error':''); status.textContent=message;
-}
-async function identifyAssets(){
-  if(!pendingPhoto) return;
-  const c=getConfig();
-  if(c.aiEnabled===false){setAiUi('idle','AI is off. Add asset rows manually.');return}
-  const requestId=++aiRequestSeq; setAiUi('loading','AI is detecting visible assets and quantities… You can fill the other fields meanwhile.'); $('retryAiBtn').disabled=true;
-  try{
-    const image=await shrinkDataUrlForAi(pendingPhoto.dataUrl);
-    const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),30000);
-    const response=await apiFetch('/ai',{method:'POST',body:JSON.stringify({image,mode:'multi_asset'}),signal:controller.signal}); clearTimeout(timeout);
-    const data=await response.json().catch(()=>({})); if(!response.ok) throw new Error(data.error||`AI server error ${response.status}`);
-    if(requestId!==aiRequestSeq || !pendingPhoto) return;
-    const suggestions=Array.isArray(data.assets)?data.assets.map(a=>normalizeAsset({assetName:a.name||a.asset_name,quantity:a.quantity||1,condition:'Good'})).filter(a=>a.assetName):[];
-    if(!suggestions.length) throw new Error('No clear assets returned');
-    const current=collectAssetRows(false); const namesBlank=current.every(a=>!a.assetName);
-    if(!assetRowsTouched || namesBlank){renderAssetRows(suggestions,false);assetRowsTouched=false;setAiUi('done',`AI detected ${suggestions.length} asset type${suggestions.length===1?'':'s'}. Verify names and quantities before saving.`)}
-    else setAiUi('done',`AI detected ${suggestions.length} asset type${suggestions.length===1?'':'s'}, but your manual edits were kept. Tap Retry AI if you want to replace them.`);
-  }catch(err){
-    if(requestId!==aiRequestSeq) return; console.error(err);
-    const msg=err?.name==='AbortError'?'AI timed out. Add assets manually or tap Retry AI.':'AI could not reliably detect assets. Add them manually or tap Retry AI.'; setAiUi('error',msg);
-  }finally{$('retryAiBtn').disabled=false}
-}
+$('takePhotoBtn').onclick=()=>{if(fixedValid())$('cameraInput').click()};$('uploadPhotoBtn').onclick=()=>{if(fixedValid())$('galleryInput').click()};
+$('cameraInput').onchange=async e=>{await preparePhoto(e.target.files?.[0],'camera');e.target.value=''};$('galleryInput').onchange=async e=>{await preparePhoto(e.target.files?.[0],'gallery');e.target.value=''};
+async function preparePhoto(file,source){if(!file)return;toast('Compressing photo…');try{const c=await compressPhoto(file);const d=new Date();pendingPhoto={dataUrl:c.dataUrl,size:c.size,source,capturedAt:d.toISOString(),photoName:file.name||'photo.jpg'};$('photoPreview').src=c.dataUrl;$('capturedDate').textContent=fmtDate(d);$('capturedTime').textContent=fmtTime(d);const loc=saveSticky();$('locationSnapshot').textContent=`${loc.city} · ${loc.area} · ${loc.building} · Floor ${loc.floor} · Room ${loc.room}`;$('subLocation').value='';$('remarks').value='';fillClickedBy('clickedBy',session.user.id);renderAssetRows([assetDefault()]);$('detailModal').classList.remove('hidden');$('aiStatus').textContent=`Compressed to ${bytesLabel(c.size)}. AI analysing…`;runAi()}catch(e){console.error(e);toast('Could not prepare photo.',4000)}}
+async function runAi(){if(!pendingPhoto)return;const seq=++aiSeq;$('retryAiBtn').disabled=true;try{const d=await apiJson('/ai',{method:'POST',body:JSON.stringify({image:pendingPhoto.dataUrl})});if(seq!==aiSeq||!pendingPhoto)return;const list=(d.assets||[]).map(x=>({...assetDefault(),assetName:x.name||'',quantity:x.quantity||1}));if(list.length){renderAssetRows(list);$('aiStatus').textContent=`AI detected ${list.length} asset type${list.length===1?'':'s'}. Verify and edit if required.`}else $('aiStatus').textContent='AI found no clear fixed asset. Add manually.'}catch(e){$('aiStatus').textContent='AI could not identify reliably. Enter assets manually.'}finally{$('retryAiBtn').disabled=false}}
+$('retryAiBtn').onclick=runAi;$('addAssetRowBtn').onclick=()=>{$('assetRows').insertAdjacentHTML('beforeend',assetRowHtml(assetDefault()));wireAssetRows($('assetRows'))};$('discardPhotoBtn').onclick=()=>{pendingPhoto=null;aiSeq++;$('detailModal').classList.add('hidden')};
+$('savePhotoBtn').onclick=async()=>{if(!pendingPhoto)return;const assets=collectAssetRows();if(!$('subLocation').value.trim()||!$('clickedBy').value||!assets.length||assets.some(a=>!a.assetName)){toast('Complete sub-location, clicked by and all asset names.');return}const loc=saveSticky();try{await apiJson('/records',{method:'POST',body:JSON.stringify({clientId:uid(),photo:pendingPhoto.dataUrl,photoSize:pendingPhoto.size,photoName:pendingPhoto.photoName,capturedAt:pendingPhoto.capturedAt,source:pendingPhoto.source,...loc,subLocation:$('subLocation').value.trim(),clickedByUserId:$('clickedBy').value,remarks:$('remarks').value.trim(),assets})});pendingPhoto=null;$('detailModal').classList.add('hidden');toast('Photo saved to company cloud.');await refreshRecords()}catch(e){toast(e.message,4300)}};
 
-async function handlePhotoFile(file,source){
-  if(!file) return; toast('Preparing photo…');
-  try{
-    const dataUrl=await fileToJpegDataUrl(file); const d=(file.lastModified && file.lastModified>0)?new Date(file.lastModified):new Date();
-    pendingPhoto={dataUrl,capturedAt:d.toISOString(),originalName:file.name||'asset-photo.jpg',source};
-    $('preview').src=dataUrl;$('capturedDate').textContent=formatDate(d);$('capturedTime').textContent=formatTime(d);$('locationSnapshot').innerHTML=locationSnapshotHtml();
-    $('subLocation').value='';$('clickedBy').value='';$('remarks').value=''; assetRowsTouched=false;renderAssetRows([normalizeAsset()],false);setAiUi('idle','');
-    $('detailModal').classList.remove('hidden');setTimeout(()=>$('subLocation').focus(),250);identifyAssets();
-  }catch(err){console.error(err);toast('Could not prepare this photo.',4000)}
-}
-function ensureTeamConfigured(){if(members().length!==3){$('settingsModal').classList.remove('hidden');toast('Set the 3-member team first.');return false}return true}
+// ---------- records ----------
+function flattenAssets(){return records.flatMap(r=>(r.assets||[]).map(a=>({record:r,asset:a})))}
+async function refreshRecords(){if(!session)return;try{const d=await apiJson('/records');records=d.records||[];renderRecent();populateFilters()}catch(e){toast(e.message)}}
+function renderRecent(){const list=records.slice().sort((a,b)=>new Date(b.capturedAt)-new Date(a.capturedAt));$('photoCount').textContent=list.length;$('assetCount').textContent=flattenAssets().length;$('recordsEmpty').classList.toggle('hidden',list.length>0);$('recordList').innerHTML=list.slice(0,50).map(recordCard).join('');wireRecordActions($('recordList'))}
+function statusClass(s){return s==='Found'?'found':s==='Not Found'?'notfound':'pending'}
+function recordCard(r){const tags=(r.assets||[]).map(a=>`<span class="asset-tag ${statusClass(a.verificationStatus)}">${escapeHtml(a.assetName)} × ${a.quantity} · ${escapeHtml(a.condition)} · ${escapeHtml(a.verificationStatus)}</span>`).join('');return `<article class="record"><img src="${escapeHtml(r.photoUrl)}" alt="Verification"><div><h3>${escapeHtml(r.building)} · Room ${escapeHtml(r.room)}</h3><p>${escapeHtml(r.city)} · ${escapeHtml(r.area)} · Floor ${escapeHtml(r.floor)} · ${escapeHtml(r.subLocation)}</p><p>${fmtDate(r.capturedAt)} ${fmtTime(r.capturedAt)} · By ${escapeHtml(r.clickedByName||'')}</p>${r.remarks?`<p>Remarks: ${escapeHtml(r.remarks)}</p>`:''}<div class="asset-tags">${tags}</div></div><div class="record-actions"><button class="secondary mini-btn" data-edit-record="${r.id}">Edit</button>${isAdmin()?`<button class="danger mini-btn" data-delete-record="${r.id}">Delete</button>`:''}</div></article>`}
+function wireRecordActions(container){container.querySelectorAll('[data-edit-record]').forEach(b=>b.onclick=()=>openRecordEdit(b.dataset.editRecord));container.querySelectorAll('[data-delete-record]').forEach(b=>b.onclick=()=>deleteRecord(b.dataset.deleteRecord))}
+async function deleteRecord(id){if(!isAdmin())return;if(!confirm('Delete this photo and its asset rows? Verifiers cannot restore it.'))return;try{await apiJson(`/records/${encodeURIComponent(id)}`,{method:'DELETE'});toast('Deleted');await refreshRecords()}catch(e){toast(e.message)}}
+function fillClickedBy(selectId,selected){const s=$(selectId);s.innerHTML=users.filter(u=>u.active!==0).map(u=>`<option value="${u.id}" ${String(u.id)===String(selected)?'selected':''}>${escapeHtml(u.name)}</option>`).join('')}
+function openRecordEdit(id){const r=records.find(x=>String(x.id)===String(id));if(!r)return;editingRecord=r;$('editPreview').src=r.photoUrl;$('editRoom').value=r.room;$('editSubLocation').value=r.subLocation;$('editRemarks').value=r.remarks||'';fillClickedBy('editClickedBy',r.clickedByUserId);renderAssetRows(r.assets,true);$('editRecordModal').classList.remove('hidden')}
+$('editAddAssetBtn').onclick=()=>{$('editAssetRows').insertAdjacentHTML('beforeend',assetRowHtml(assetDefault(),true));wireAssetRows($('editAssetRows'),true)};
+$('saveRecordEditBtn').onclick=async()=>{if(!editingRecord)return;const assets=collectAssetRows(true);if(!$('editRoom').value.trim()||!$('editSubLocation').value.trim()||!$('editClickedBy').value||assets.some(a=>!a.assetName)){toast('Complete required fields.');return}try{await apiJson(`/records/${encodeURIComponent(editingRecord.id)}`,{method:'PUT',body:JSON.stringify({room:$('editRoom').value.trim(),subLocation:$('editSubLocation').value.trim(),clickedByUserId:$('editClickedBy').value,remarks:$('editRemarks').value.trim(),assets})});$('editRecordModal').classList.add('hidden');toast('Changes saved.');await refreshRecords()}catch(e){toast(e.message)}};
 
-$('takePhotoBtn').addEventListener('click',()=>{if(!fixedLocationValid()||!ensureTeamConfigured())return;$('cameraInput').click()});
-$('uploadPhotoBtn').addEventListener('click',()=>{if(!fixedLocationValid()||!ensureTeamConfigured())return;$('galleryInput').click()});
-$('cameraInput').addEventListener('change',async(e)=>{const file=e.target.files?.[0];await handlePhotoFile(file,'camera');e.target.value=''});
-$('galleryInput').addEventListener('change',async(e)=>{const file=e.target.files?.[0];await handlePhotoFile(file,'gallery');e.target.value=''});
-$('retryAiBtn').addEventListener('click',()=>{assetRowsTouched=false;renderAssetRows([normalizeAsset()],false);identifyAssets()});
-$('addAssetRowBtn').addEventListener('click',()=>{const container=$('assetRows');container.insertAdjacentHTML('beforeend',assetRowHtml(normalizeAsset(),false));attachAssetRowEvents(container,false);assetRowsTouched=true});
-$('discardBtn').addEventListener('click',()=>{pendingPhoto=null;aiRequestSeq++;$('detailModal').classList.add('hidden')});
+// ---------- search/filter ----------
+function uniqueVals(key){return [...new Set(records.map(r=>r[key]).filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b)))}
+function setOptions(id,vals,label){$(id).innerHTML=`<option value="">All ${label}</option>`+vals.map(v=>`<option>${escapeHtml(v)}</option>`).join('')}
+function populateFilters(){setOptions('filterCity',uniqueVals('city'),'Cities');setOptions('filterArea',uniqueVals('area'),'Areas');setOptions('filterBuilding',uniqueVals('building'),'Buildings');setOptions('filterFloor',uniqueVals('floor'),'Floors');setOptions('filterRoom',uniqueVals('room'),'Rooms')}
+function renderStatusTabs(){const rows=flattenAssets();const items=[['ALL','All',rows.length],['Found','Found',rows.filter(x=>x.asset.verificationStatus==='Found').length],['Not Found','Not Found',rows.filter(x=>x.asset.verificationStatus==='Not Found').length],['Pending','Pending',rows.filter(x=>x.asset.verificationStatus==='Pending').length],['IMAGES','📷 With Images',records.length]];$('statusTabs').innerHTML=items.map(([k,l,n])=>`<button class="${activeStatus===k?'active':''}" data-status="${k}">${l} (${n})</button>`).join('');$('statusTabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{activeStatus=b.dataset.status;renderSearch()})}
+function searchFilteredRecords(){const q=$('searchText').value.trim().toLowerCase(),f={city:$('filterCity').value,area:$('filterArea').value,building:$('filterBuilding').value,floor:$('filterFloor').value,room:$('filterRoom').value,condition:$('filterCondition').value};return records.filter(r=>{if(f.city&&r.city!==f.city)return false;if(f.area&&r.area!==f.area)return false;if(f.building&&r.building!==f.building)return false;if(f.floor&&r.floor!==f.floor)return false;if(f.room&&r.room!==f.room)return false;const assets=r.assets||[];const assetMatch=assets.some(a=>{if(f.condition&&a.condition!==f.condition)return false;if(activeStatus!=='ALL'&&activeStatus!=='IMAGES'&&a.verificationStatus!==activeStatus)return false;const hay=[a.assetName,a.serialNumber,a.barcode,a.condition,a.verificationStatus,a.notFoundReason,r.city,r.area,r.building,r.floor,r.room,r.subLocation,r.remarks,r.clickedByName].join(' ').toLowerCase();return !q||hay.includes(q)});return assetMatch||((activeStatus==='IMAGES'||activeStatus==='ALL')&&!q&&!f.condition)})}
+function renderSearch(){renderStatusTabs();const found=searchFilteredRecords();$('searchResults').innerHTML=found.map(recordCard).join('');$('searchEmpty').classList.toggle('hidden',found.length>0);wireRecordActions($('searchResults'))}
+['searchText','filterCity','filterArea','filterBuilding','filterFloor','filterRoom','filterCondition'].forEach(id=>$(id).addEventListener(id==='searchText'?'input':'change',renderSearch));
+$('clearFiltersBtn').onclick=()=>{['searchText','filterCity','filterArea','filterBuilding','filterFloor','filterRoom','filterCondition'].forEach(id=>$(id).value='');activeStatus='ALL';renderSearch()};
 
-async function uploadPending(local){
-  const payload=normalizeRecord(local);
-  const res=await apiFetch('/records',{method:'POST',body:JSON.stringify({
-    clientId:payload.clientId||uniqueId(),photo:local.photo,photoName:local.photoName||'asset-photo.jpg',capturedAt:payload.capturedAt,source:payload.source,
-    city:payload.city,area:payload.area,building:payload.building,floor:payload.floor,room:payload.room,subLocation:payload.subLocation,
-    clickedBy:payload.clickedBy,remarks:payload.remarks,assets:payload.assets,createdAt:payload.createdAt
-  })});
-  const data=await res.json().catch(()=>({})); if(!res.ok) throw new Error(data.error||`Upload ${res.status}`); return data.record;
-}
-async function syncPendingRecords(showToast=false){
-  const locals=(await dbAllRaw()).filter(r=>r.photo && !r.remoteId);
-  if(!locals.length) return 0;
-  setSyncBadge('syncing','Syncing…'); let done=0;
-  for(const r of locals){
-    try{
-      if(!r.clientId){r.clientId=uniqueId();await dbPut(r)}
-      await uploadPending(r); await dbDelete(r.id); done++;
-    }catch(err){console.error('Sync failed',err);break}
-  }
-  if(done && showToast) toast(`${done} saved photo${done===1?'':'s'} synced to team cloud.`);
-  return done;
-}
+// ---------- users & rights ----------
+async function refreshUsers(){if(!session)return;try{const d=await apiJson('/users');users=d.users||[];if(isAdmin())renderUsers()}catch(e){console.error(e)}}
+function renderUsers(){$('userCards').innerHTML=users.map(u=>`<article class="user-card"><div class="user-top"><div class="avatar">${escapeHtml((u.name||'?')[0].toUpperCase())}</div><div><h3>${escapeHtml(u.name)}</h3><div class="muted">@${escapeHtml(u.username)}</div><span class="role-badge ${u.role==='ADMIN'?'admin':''}">${u.role==='ADMIN'?'Admin':'Verifier'}</span></div></div><div class="user-stats"><div><strong>${u.photoCount||0}</strong><small>Photos</small></div><div><strong>${u.assetCount||0}</strong><small>Asset rows</small></div></div><div class="user-actions"><button class="secondary mini-btn" data-user-edit="${u.id}">Edit</button>${String(u.id)!==String(session.user.id)?`<button class="danger mini-btn" data-user-delete="${u.id}">Delete</button>`:''}</div></article>`).join('');document.querySelectorAll('[data-user-edit]').forEach(b=>b.onclick=()=>openUserModal(b.dataset.userEdit));document.querySelectorAll('[data-user-delete]').forEach(b=>b.onclick=()=>deleteUser(b.dataset.userDelete))}
+$('addUserBtn').onclick=()=>openUserModal();
+function openUserModal(id=null){editingUser=id?users.find(u=>String(u.id)===String(id)):null;$('userModalTitle').textContent=editingUser?'Edit Team Member':'Add Team Member';$('userName').value=editingUser?.name||'';$('userUsername').value=editingUser?.username||'';$('userPassword').value='';$('userRole').value=editingUser?.role||'VERIFIER';$('passwordHint').textContent=editingUser?'Leave blank to keep the current password.':'Required for a new user.';$('userModal').classList.remove('hidden')}
+$('saveUserBtn').onclick=async()=>{const payload={name:$('userName').value.trim(),username:$('userUsername').value.trim(),password:$('userPassword').value,role:$('userRole').value};if(!payload.name||!payload.username||(!editingUser&&!payload.password)){toast('Complete required fields.');return}try{let result;if(editingUser)result=await apiJson(`/users/${editingUser.id}`,{method:'PUT',body:JSON.stringify(payload)});else result=await apiJson('/users',{method:'POST',body:JSON.stringify(payload)});if(editingUser&&String(editingUser.id)===String(session.user.id)&&result.user){session.user={...session.user,...result.user};saveSession();updateShell();if(!isAdmin()){showView('verifyView')}}$('userModal').classList.add('hidden');toast('User saved.');await refreshUsers()}catch(e){toast(e.message,4000)}};
+async function deleteUser(id){if(!confirm('Delete this team member from this company?'))return;try{await apiJson(`/users/${id}`,{method:'DELETE'});toast('User deleted.');await refreshUsers()}catch(e){toast(e.message,4000)}}
 
-$('saveRecordBtn').addEventListener('click',async()=>{
-  const subLocation=$('subLocation').value.trim(),clickedBy=$('clickedBy').value,remarks=$('remarks').value.trim(); const assets=collectAssetRows(false);
-  if(!subLocation||!clickedBy||!assetRowsValid(assets)){toast('Complete Sub-location, Clicked By, and every Asset Name / Quantity.');return}
-  if(!pendingPhoto){toast('Photo is missing.');return}
-  persistFixed(); const c=getConfig();
-  const localId=await dbAdd({
-    clientId:uniqueId(),photo:pendingPhoto.dataUrl,photoName:pendingPhoto.originalName,capturedAt:pendingPhoto.capturedAt,source:pendingPhoto.source,
-    city:c.city,area:c.area,building:c.building,floor:c.floor,room:c.room,subLocation,clickedBy,remarks,assets,appVersion:4,createdAt:new Date().toISOString()
-  });
-  pendingPhoto=null;aiRequestSeq++;$('detailModal').classList.add('hidden');activeTeamTab=clickedBy;
-  await renderRecords();toast('Photo saved. Syncing to team cloud…');
-  try{await syncPendingRecords();await refreshSharedRecords();toast('Photo saved to shared team cloud.')}catch(err){console.error(err);setSyncBadge('offline','Saved locally');toast('Saved on this device. It will sync automatically when internet returns.',4200)}
-});
+// ---------- company settings ----------
+function fillCompanyEdit(){$('editCompanyName').value=session.company.name;$('editCompanyStartDate').value=session.company.startDate;$('editCompanyCode').value=session.company.code}
+$('saveCompanyBtn').onclick=async()=>{try{const d=await apiJson('/company',{method:'PUT',body:JSON.stringify({name:$('editCompanyName').value.trim(),startDate:$('editCompanyStartDate').value})});session.company=d.company;saveSession();updateShell();toast('Company details updated.')}catch(e){toast(e.message)}};
+$('deleteCompanyBtn').onclick=async()=>{if(!isAdmin())return;const name=session.company.name;if(prompt(`Type DELETE ${name} to permanently delete this company`)!==`DELETE ${name}`)return;try{await apiJson('/company',{method:'DELETE'});clearSession();showWelcome();toast('Company deleted.')}catch(e){toast(e.message,4000)}};
 
-function filteredRows(rows){return activeTeamTab==='ALL'?rows:rows.filter(r=>r.clickedBy===activeTeamTab)}
-function renderTabs(rows){
-  const people=members(); if(activeTeamTab!=='ALL' && !people.includes(activeTeamTab)) activeTeamTab='ALL';
-  const tabs=[{key:'ALL',label:'All',count:rows.length},...people.map(p=>({key:p,label:p,count:rows.filter(r=>r.clickedBy===p).length}))];
-  $('teamTabs').innerHTML=tabs.map(t=>`<button class="tab ${activeTeamTab===t.key?'active':''}" data-team-tab="${escapeHtml(t.key)}"><span>${escapeHtml(t.label)}</span><b>${t.count}</b></button>`).join('');
-  document.querySelectorAll('[data-team-tab]').forEach(btn=>btn.onclick=async()=>{activeTeamTab=btn.dataset.teamTab;await renderRecords()});
-}
-function assetSummary(r){const parts=r.assets.slice(0,4).map(a=>`${escapeHtml(a.assetName)} × ${a.quantity}`);if(r.assets.length>4)parts.push(`+${r.assets.length-4} more`);return parts.join(' · ')}
+// ---------- usage ----------
+async function loadUsage(){try{const d=await apiJson('/usage');const pct=Math.min(100,(d.usedBytes/R2_FREE_BYTES)*100);$('usageText').textContent=`${bytesLabel(d.usedBytes)} of 10 GB`;$('usagePercent').textContent=`${pct.toFixed(2)}%`;$('usageBar').style.width=`${pct}%`;$('usagePhotos').textContent=d.photoCount;$('usageAssets').textContent=d.assetCount;$('usageBytes').textContent=bytesLabel(d.usedBytes)}catch(e){toast(e.message)}}
 
-async function getPendingRecords(){
-  return (await dbAllRaw()).filter(r=>r.photo && !r.remoteId).map(r=>({...normalizeRecord(r),_kind:'local',_localId:r.id,photoSrc:r.photo}));
-}
-function remoteToUi(r){const n=normalizeRecord(r);return {...n,_kind:'remote',_remoteId:r.id||n.remoteId,photoSrc:n.photoUrl||`${WORKER_URL}/photo/${r.id}`}}
-async function combinedRecords(){const pending=await getPendingRecords();const remote=sharedRecords.map(remoteToUi);return [...remote,...pending].sort((a,b)=>validDate(a.capturedAt)-validDate(b.capturedAt))}
+// ---------- Excel export ----------
+async function urlToBase64(url){const r=await fetch(url,{headers:authHeaders(false)});if(!r.ok)throw new Error('Photo fetch failed');return await blobToDataUrl(await r.blob())}
+$('exportBtn').onclick=async()=>{if(!records.length){toast('No records to export.');return}if(!window.ExcelJS){toast('Excel library is not loaded.');return}toast('Preparing Excel report…',5000);try{const wb=new ExcelJS.Workbook();const ws=wb.addWorksheet('Physical Verification');ws.views=[{state:'frozen',ySplit:1}];ws.columns=[{header:'Sr No',key:'sr',width:8},{header:'Photo',key:'photo',width:24},{header:'Company',key:'company',width:28},{header:'City',key:'city',width:16},{header:'Area',key:'area',width:18},{header:'Building',key:'building',width:22},{header:'Floor',key:'floor',width:12},{header:'Room',key:'room',width:16},{header:'Sub-location',key:'sub',width:22},{header:'Asset Name',key:'asset',width:28},{header:'Quantity',key:'qty',width:10},{header:'Condition',key:'condition',width:16},{header:'Found Status',key:'status',width:15},{header:'Not Found Reason',key:'reason',width:18},{header:'Serial Number',key:'serial',width:20},{header:'Barcode / Asset Tag',key:'barcode',width:20},{header:'Remarks',key:'remarks',width:30},{header:'Clicked By',key:'by',width:20},{header:'Date',key:'date',width:14},{header:'Time',key:'time',width:14}];ws.getRow(1).font={bold:true};ws.getRow(1).height=26;let sr=0,rowNo=2;for(const r of records){let photoId=null;try{const data=await urlToBase64(r.photoUrl);const ext=data.startsWith('data:image/png')?'png':'jpeg';photoId=wb.addImage({base64:data,extension:ext})}catch{}for(const a of r.assets||[]){sr++;const row=ws.addRow({sr,company:session.company.name,city:r.city,area:r.area,building:r.building,floor:r.floor,room:r.room,sub:r.subLocation,asset:a.assetName,qty:a.quantity,condition:a.condition,status:a.verificationStatus,reason:a.notFoundReason||'',serial:a.serialNumber||'',barcode:a.barcode||'',remarks:r.remarks||'',by:r.clickedByName,date:fmtDate(r.capturedAt),time:fmtTime(r.capturedAt)});row.height=84;if(photoId!==null)ws.addImage(photoId,{tl:{col:1,row:rowNo-1},ext:{width:145,height:100}});rowNo++}}const buf=await wb.xlsx.writeBuffer();const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${session.company.code}_Physical_Verification_${isoDateInput(new Date())}.xlsx`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);toast('Excel report generated.')}catch(e){console.error(e);toast('Could not generate Excel report.',4200)}};
 
-async function refreshSharedRecords(){
-  try{
-    setSyncBadge('syncing','Syncing…');
-    const res=await apiFetch('/records'); const data=await res.json().catch(()=>({})); if(!res.ok) throw new Error(data.error||`Records ${res.status}`);
-    sharedRecords=Array.isArray(data.records)?data.records:[]; setSyncBadge('online','Cloud synced'); await renderRecords(); return true;
-  }catch(err){console.error(err);setSyncBadge('offline','Offline');await renderRecords();return false}
-}
-async function renderRecords(){
-  const rows=await combinedRecords(); renderTabs(rows); const shown=filteredRows(rows); $('recordCount').textContent=rows.length;
-  $('emptyState').style.display=shown.length?'none':'block'; $('emptyState').textContent=rows.length?`No saved photos under ${activeTeamTab==='ALL'?'this tab':activeTeamTab}.`:'No asset photos captured yet.';
-  $('exportBtn').textContent=activeTeamTab==='ALL'?'Export Excel':`Export ${activeTeamTab}`;
-  $('recordList').innerHTML=shown.slice().reverse().map(r=>{
-    const d=validDate(r.capturedAt); const pending=r._kind==='local';
-    return `<article class="record"><img src="${escapeHtml(r.photoSrc)}" alt="Verification photo"><div><h3>${assetSummary(r)}</h3><p>${escapeHtml(r.building)} · Floor ${escapeHtml(r.floor)} · Room ${escapeHtml(r.room)}</p><p>${escapeHtml(r.subLocation)} · ${formatDate(d)} ${formatTime(d)}</p><p>By ${escapeHtml(r.clickedBy)}${r.remarks?` · ${escapeHtml(r.remarks)}`:''}</p>${pending?'<span class="sync-pending">Pending cloud sync</span>':''}</div><div class="record-actions"><button class="mini-btn" data-edit-kind="${r._kind}" data-edit-id="${pending?r._localId:r._remoteId}">Edit</button><button class="mini-btn danger" data-delete-kind="${r._kind}" data-delete-id="${pending?r._localId:r._remoteId}">Delete</button></div></article>`;
-  }).join('');
-  document.querySelectorAll('[data-delete-kind]').forEach(b=>b.onclick=async()=>{
-    if(!confirm('Delete this verification photo for the whole team?')) return;
-    if(b.dataset.deleteKind==='local') await dbDelete(Number(b.dataset.deleteId));
-    else {const res=await apiFetch(`/records/${encodeURIComponent(b.dataset.deleteId)}`,{method:'DELETE'});if(!res.ok){toast('Could not delete shared photo.');return}sharedRecords=sharedRecords.filter(r=>String(r.id)!==String(b.dataset.deleteId))}
-    await renderRecords();toast('Deleted');
-  });
-  document.querySelectorAll('[data-edit-kind]').forEach(b=>b.onclick=()=>openEdit(b.dataset.editKind,b.dataset.editId));
-}
+// ---------- misc ----------
+async function health(){try{await fetch(WORKER_URL)}catch{}}
 
-async function openEdit(kind,id){
-  let r;
-  if(kind==='local'){const raw=await dbGet(Number(id));if(!raw)return;r=normalizeRecord(raw);editingRef={kind,id:Number(id)}}
-  else {const raw=sharedRecords.find(x=>String(x.id)===String(id));if(!raw)return;r=normalizeRecord(raw);editingRef={kind,id:String(id)}}
-  $('editPreview').src=kind==='local'?(r.photo||''):(r.photoUrl||`${WORKER_URL}/photo/${id}`); $('editRoom').value=r.room;$('editSubLocation').value=r.subLocation;$('editRemarks').value=r.remarks||'';
-  refreshMembers();$('editClickedBy').value=r.clickedBy;renderAssetRows(r.assets,true);$('editModal').classList.remove('hidden');
-}
-$('editAddAssetRowBtn').onclick=()=>{const c=$('editAssetRows');c.insertAdjacentHTML('beforeend',assetRowHtml(normalizeAsset(),true));attachAssetRowEvents(c,true)};
-$('closeEditBtn').onclick=()=>{$('editModal').classList.add('hidden');editingRef=null};
-$('saveEditBtn').onclick=async()=>{
-  if(!editingRef)return;
-  const room=$('editRoom').value.trim(),sub=$('editSubLocation').value.trim(),who=$('editClickedBy').value,remarks=$('editRemarks').value.trim(),assets=collectAssetRows(true);
-  if(!room||!sub||!who||!assetRowsValid(assets)){toast('Complete Room, Sub-location, Clicked By, and every Asset Name / Quantity.');return}
-  if(editingRef.kind==='local'){
-    const raw=await dbGet(editingRef.id);if(!raw)return;Object.assign(raw,{room,subLocation:sub,clickedBy:who,remarks,assets});await dbPut(raw);
-  }else{
-    const res=await apiFetch(`/records/${encodeURIComponent(editingRef.id)}`,{method:'PUT',body:JSON.stringify({room,subLocation:sub,clickedBy:who,remarks,assets})});
-    const data=await res.json().catch(()=>({}));if(!res.ok){toast(data.error||'Could not save changes.');return}
-  }
-  $('editModal').classList.add('hidden');editingRef=null;await refreshSharedRecords();toast('Changes saved');
-};
+window.addEventListener('online',()=>{$('syncBadge').textContent='Cloud';refreshRecords()});window.addEventListener('offline',()=>{$('syncBadge').textContent='Offline'});
+health();restoreSession();
 
-$('settingsBtn').onclick=()=>{$('settingsModal').classList.remove('hidden')};
-$('closeSettingsBtn').onclick=()=>{$('settingsModal').classList.add('hidden')};
-$('saveSettingsBtn').onclick=async()=>{
-  const vals=[$('member1').value.trim(),$('member2').value.trim(),$('member3').value.trim()];
-  if(vals.some(v=>!v)){toast('Enter all 3 team-member names.');return}
-  if(new Set(vals.map(v=>v.toLowerCase())).size!==3){toast('Use three different team-member names.');return}
-  $('saveSettingsBtn').disabled=true;
-  try{
-    await saveSharedConfig(vals); setConfig({aiEnabled:$('aiEnabled').checked}); $('settingsModal').classList.add('hidden'); await renderRecords();toast('Shared team settings saved.');
-  }catch(err){console.error(err);toast('Could not save shared team settings. Check cloud setup.',4200)}
-  finally{$('saveSettingsBtn').disabled=false}
-};
-['city','area','building','floor','roomFixed'].forEach(k=>$(k).addEventListener('change',persistFixed));
-
-$('clearAllBtn').onclick=async()=>{
-  const rows=await combinedRecords();if(!rows.length)return;
-  if(!confirm('Delete ALL shared verification photos for every team member? This cannot be undone.'))return;
-  try{const res=await apiFetch('/records',{method:'DELETE'});if(!res.ok)throw new Error('Delete failed');await dbClear();sharedRecords=[];activeTeamTab='ALL';await renderRecords();toast('All shared records cleared')}
-  catch(err){console.error(err);toast('Could not clear shared records.',4000)}
-};
-
-async function cleanupLocalExpired(){
-  const rows=await dbAllRaw();const cutoff=Date.now()-RETENTION_DAYS*86400000;
-  for(const r of rows){const t=validDate(r.createdAt||r.capturedAt).getTime();if(t<cutoff)await dbDelete(r.id)}
-}
-async function requestPersistentStorage(){try{if(navigator.storage?.persist)await navigator.storage.persist()}catch{}}
-
-async function exportExcel(){
-  const rows=filteredRows(await combinedRecords());
-  if(!rows.length){toast('No saved photos in this tab to export.');return}
-  if(typeof ExcelJS==='undefined'){toast('Excel library not loaded. Connect to internet and reopen the app.',4000);return}
-  $('exportBtn').disabled=true;$('exportBtn').textContent='Preparing…';
-  try{
-    const wb=new ExcelJS.Workbook();wb.creator='PV Capture';wb.created=new Date();const title=activeTeamTab==='ALL'?'Physical Verification':activeTeamTab.slice(0,28);const ws=wb.addWorksheet(title,{views:[{state:'frozen',ySplit:1}]});
-    ws.columns=[
-      {header:'Sr No',key:'sr',width:8},{header:'Photo',key:'photo',width:20},{header:'City',key:'city',width:18},{header:'Area',key:'area',width:20},{header:'Building',key:'building',width:24},{header:'Floor Number',key:'floor',width:14},{header:'Room Number',key:'room',width:16},{header:'Sub-location',key:'sub',width:24},{header:'Name of Asset',key:'asset',width:28},{header:'Quantity',key:'qty',width:10},{header:'Serial Number',key:'serial',width:18},{header:'Barcode / Asset Tag',key:'barcode',width:18},{header:'Condition',key:'condition',width:16},{header:'Not Found Reason',key:'notFound',width:20},{header:'Remarks',key:'remarks',width:28},{header:'Clicked By',key:'who',width:20},{header:'Date',key:'date',width:13},{header:'Time',key:'time',width:12}
-    ];
-    const header=ws.getRow(1);header.height=24;header.font={bold:true,color:{argb:'FFFFFFFF'}};header.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF0F172A'}};header.alignment={vertical:'middle',horizontal:'center'};
-    let sr=1;
-    for(const r of rows){
-      const d=validDate(r.capturedAt),assets=r.assets.length?r.assets:[normalizeAsset()];const firstRowNo=ws.rowCount+1;
-      assets.forEach((a,assetIdx)=>{const row=ws.addRow({sr:sr++,city:r.city,area:r.area,building:r.building,floor:r.floor,room:r.room,sub:r.subLocation,asset:a.assetName,qty:a.quantity,serial:a.serialNumber||'',barcode:a.barcode||'',condition:a.condition||'',notFound:a.notFoundReason||'',remarks:r.remarks||'',who:r.clickedBy,date:formatDate(d),time:formatTime(d)});row.height=assets.length===1?78:Math.max(34,Math.ceil(92/assets.length));row.alignment={vertical:'middle',wrapText:true};if(assetIdx>0)row.getCell('B').value=''});
-      const lastRowNo=ws.rowCount;if(lastRowNo>firstRowNo)ws.mergeCells(`B${firstRowNo}:B${lastRowNo}`);
-      const dataUrl=await sourceToDataUrl(r.photoSrc);const imageId=wb.addImage({base64:dataUrl,extension:'jpeg'});ws.addImage(imageId,{tl:{col:1.08,row:firstRowNo-0.92},ext:{width:118,height:88}});
-    }
-    ws.autoFilter={from:'A1',to:'R1'};ws.eachRow(row=>row.eachCell(cell=>{cell.border={top:{style:'thin',color:{argb:'FFE2E8F0'}},left:{style:'thin',color:{argb:'FFE2E8F0'}},bottom:{style:'thin',color:{argb:'FFE2E8F0'}},right:{style:'thin',color:{argb:'FFE2E8F0'}}}}));
-    const buffer=await wb.xlsx.writeBuffer();const suffix=activeTeamTab==='ALL'?'All':activeTeamTab.replace(/[^a-z0-9]+/gi,'_');const file=new File([buffer],`Physical_Verification_${suffix}_${formatDate(new Date()).replaceAll('/','-')}.xlsx`,{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-    if(navigator.canShare&&navigator.canShare({files:[file]}))await navigator.share({files:[file],title:'Physical Verification Excel'});else{const url=URL.createObjectURL(file);const a=document.createElement('a');a.href=url;a.download=file.name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000)}
-    toast('Excel report ready');
-  }catch(err){console.error(err);toast('Could not create Excel. Check internet and try again.',4000)}
-  finally{$('exportBtn').disabled=false;await renderRecords()}
-}
-$('exportBtn').onclick=exportExcel;
-
-async function startup(){
-  await openDb();hydrateConfig();await cleanupLocalExpired();await requestPersistentStorage();
-  setSyncBadge('syncing','Connecting…');
-  const configOk=await loadSharedConfig();
-  if(!configOk) setSyncBadge('offline','Cloud setup needed');
-  await syncPendingRecords();
-  await refreshSharedRecords();
-  if(members().length!==3)setTimeout(()=>$('settingsModal').classList.remove('hidden'),500);
-  if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
-  window.addEventListener('online',async()=>{await syncPendingRecords(true);await refreshSharedRecords()});
-  refreshTimer=setInterval(async()=>{if(document.visibilityState==='visible'){await syncPendingRecords();await refreshSharedRecords()}},30000);
-  document.addEventListener('visibilitychange',async()=>{if(document.visibilityState==='visible'){await syncPendingRecords();await refreshSharedRecords()}});
-}
-window.addEventListener('DOMContentLoaded',startup);
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.error));}

@@ -2,148 +2,284 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0f172a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="PV Capture" />
-  <title>PV Capture</title>
+  <meta name="apple-mobile-web-app-title" content="PRS.AssetVerify" />
+  <title>PRS Asset Verification App</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="styles.css" />
   <script src="https://unpkg.com/exceljs@4.4.0/dist/exceljs.min.js"></script>
 </head>
 <body>
-  <div id="app">
+  <div id="appShell">
     <header class="topbar">
-      <div>
-        <div class="eyebrow">PHYSICAL VERIFICATION</div>
-        <h1>PV Capture</h1>
+      <button id="menuBtn" class="icon-btn hidden" aria-label="Menu">☰</button>
+      <div class="brand-center">
+        <strong>PRS Asset Verification App</strong>
+        <span id="companySubtitle" class="company-subtitle"></span>
       </div>
-      <div class="topbar-actions">
-        <span id="syncBadge" class="sync-badge syncing">Connecting…</span>
-        <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙︎</button>
+      <div class="top-actions">
+        <span id="syncBadge" class="sync-badge hidden">Online</span>
+        <button id="logoutBtn" class="ghost-btn hidden">Logout</button>
       </div>
     </header>
 
+    <aside id="drawer" class="drawer hidden">
+      <div class="drawer-head">
+        <div class="eyebrow">CURRENT COMPANY</div>
+        <h2 id="drawerCompany">—</h2>
+        <div id="drawerUser" class="muted"></div>
+      </div>
+      <nav class="drawer-nav">
+        <button data-nav="verify">📷 Verification</button>
+        <button data-nav="search">⌕ Search & Filters</button>
+        <button data-nav="users" data-admin-only>👥 Users & Rights</button>
+        <button data-nav="usage">▰ Usage</button>
+        <button data-nav="editCompany" data-admin-only>✎ Edit Company</button>
+        <button data-nav="switchCompany">⇄ Switch Company</button>
+        <button data-nav="welcome">⌂ Welcome Page</button>
+      </nav>
+    </aside>
+    <div id="drawerBackdrop" class="drawer-backdrop hidden"></div>
+
     <main>
-      <section class="card sticky-card">
-        <div class="section-title-row">
-          <div>
-            <h2>Fixed Location</h2>
-            <p>These 5 fields stay the same on this device for every photo until you change them.</p>
+      <!-- WELCOME -->
+      <section id="welcomeView" class="view welcome-view">
+        <div class="welcome-card">
+          <div class="welcome-logo">PRS.AssetVerify</div>
+          <h1>PRS Asset Verification App</h1>
+          <p>Create a new company workspace or enter an existing company.</p>
+          <div class="welcome-actions">
+            <button id="openCreateCompanyBtn" class="primary large">＋ Create Company</button>
+            <button id="openExistingCompanyBtn" class="secondary large">Existing Company</button>
           </div>
-          <span class="pill">Sticky</span>
-        </div>
-        <div class="grid two">
-          <label>City<input id="city" autocomplete="off" placeholder="e.g. Ahmedabad" /></label>
-          <label>Area<input id="area" autocomplete="off" placeholder="e.g. Prahladnagar" /></label>
-          <label>Building<input id="building" autocomplete="off" placeholder="e.g. Main Hospital" /></label>
-          <label>Floor Number<input id="floor" autocomplete="off" inputmode="text" placeholder="e.g. 2 / Ground" /></label>
-          <label class="full-grid">Room Number<input id="roomFixed" autocomplete="off" placeholder="e.g. Cabin 204 / Ward 3" /></label>
         </div>
       </section>
 
-      <section class="capture-panel">
-        <input id="cameraInput" type="file" accept="image/*" capture="environment" hidden />
-        <input id="galleryInput" type="file" accept="image/*" hidden />
-        <div class="capture-buttons">
-          <button id="takePhotoBtn" class="primary big-camera">📷 Take Photo</button>
-          <button id="uploadPhotoBtn" class="secondary big-camera">▣ Upload from Gallery</button>
+      <!-- CREATE COMPANY -->
+      <section id="createCompanyView" class="view hidden">
+        <div class="page-head">
+          <div><div class="eyebrow">NEW COMPANY</div><h1>Create company workspace</h1></div>
+          <button class="secondary" data-back-welcome>Back</button>
         </div>
-        <p class="hint">AI detects visible asset types and quantities. Every AI result remains editable.</p>
-      </section>
-
-      <section class="summary-row">
-        <div class="summary-card"><span id="recordCount">0</span><small>Shared photos</small></div>
-        <button id="exportBtn" class="success">Export Excel</button>
-      </section>
-
-      <section class="card">
-        <div class="section-title-row records-head">
-          <div>
-            <h2>Shared Verification Photos</h2>
-            <p id="retentionNote">Visible to the whole team from the same link and retained for 30 days.</p>
+        <div class="card">
+          <div class="grid two">
+            <label>Company Name *<input id="newCompanyName" autocomplete="organization" placeholder="e.g. ABC Industries Pvt. Ltd." /></label>
+            <label>Assignment Start Date *<input id="newCompanyStartDate" type="date" /></label>
           </div>
-          <button id="clearAllBtn" class="text-danger">Clear all</button>
+          <div class="section-title-row top-gap">
+            <div><h2>Team Members & Rights</h2><p>Every member receives a company-specific username, password and role.</p></div>
+            <button id="addCreateMemberBtn" class="secondary">＋ Add Member</button>
+          </div>
+          <div id="createMembers" class="member-editor"></div>
+          <div class="info-box">Password recovery requests are sent to <strong>mahipal.office21@gmail.com</strong>. For security, Version 5 sends a reset code instead of revealing the old password.</div>
+          <button id="createCompanyBtn" class="primary full">Create Company</button>
         </div>
-        <div id="teamTabs" class="tabs"></div>
-        <div id="emptyState" class="empty">No asset photos captured yet.</div>
-        <div id="recordList" class="record-list"></div>
+      </section>
+
+      <!-- EXISTING COMPANY -->
+      <section id="existingCompanyView" class="view hidden">
+        <div class="page-head">
+          <div><div class="eyebrow">COMPANIES</div><h1>Existing companies</h1></div>
+          <button class="secondary" data-back-welcome>Back</button>
+        </div>
+        <div id="companyList" class="company-list"></div>
+        <div id="noCompanies" class="empty hidden">No Version 5 companies have been created yet.</div>
+      </section>
+
+      <!-- VERIFICATION -->
+      <section id="verifyView" class="view hidden">
+        <div class="card sticky-card">
+          <div class="section-title-row">
+            <div><h2>Fixed Location</h2><p>City, Area, Building, Floor and Room remain unchanged until you manually change them.</p></div>
+            <span class="pill">Sticky</span>
+          </div>
+          <div class="grid two">
+            <label>City *<input id="city" placeholder="e.g. Ahmedabad" /></label>
+            <label>Area *<input id="area" placeholder="e.g. Prahladnagar" /></label>
+            <label>Building *<input id="building" placeholder="e.g. Main Building" /></label>
+            <label>Floor Number *<input id="floor" placeholder="e.g. Ground / 2" /></label>
+            <label class="full-grid">Room Number *<input id="room" placeholder="e.g. Cabin 204" /></label>
+          </div>
+        </div>
+
+        <section class="capture-panel">
+          <input id="cameraInput" type="file" accept="image/*" capture="environment" hidden />
+          <input id="galleryInput" type="file" accept="image/*" hidden />
+          <div class="capture-buttons">
+            <button id="takePhotoBtn" class="primary big-camera">📷 Take Photo</button>
+            <button id="uploadPhotoBtn" class="secondary big-camera">▣ Upload from Gallery</button>
+          </div>
+          <p class="hint">Photos are compressed to approximately 1 MB or less before upload. AI suggests visible asset names and quantities; every suggestion is editable.</p>
+        </section>
+
+        <section class="summary-row">
+          <div class="summary-card"><span id="photoCount">0</span><small>Photos</small></div>
+          <div class="summary-card"><span id="assetCount">0</span><small>Asset rows</small></div>
+          <button id="exportBtn" class="success">Export Excel</button>
+        </section>
+
+        <div class="card">
+          <div class="section-title-row">
+            <div><h2>Recent Verification Photos</h2><p>Shared with all authorised users of this company.</p></div>
+          </div>
+          <div id="recordList" class="record-list"></div>
+          <div id="recordsEmpty" class="empty">No photos saved yet.</div>
+        </div>
+      </section>
+
+      <!-- SEARCH -->
+      <section id="searchView" class="view hidden">
+        <div class="page-head"><div><div class="eyebrow">VERIFICATION</div><h1>Search & Filters</h1></div></div>
+        <div class="card filter-card">
+          <div class="search-line"><input id="searchText" placeholder="Search asset name, serial no., room, location..." /><button id="clearFiltersBtn" class="secondary">Clear</button></div>
+          <div class="grid three filter-grid">
+            <label>City<select id="filterCity"><option value="">All Cities</option></select></label>
+            <label>Area<select id="filterArea"><option value="">All Areas</option></select></label>
+            <label>Building<select id="filterBuilding"><option value="">All Buildings</option></select></label>
+            <label>Floor<select id="filterFloor"><option value="">All Floors</option></select></label>
+            <label>Room<select id="filterRoom"><option value="">All Rooms</option></select></label>
+            <label>Condition<select id="filterCondition"><option value="">All Conditions</option><option>Good</option><option>Fair</option><option>Poor</option><option>Damaged</option><option>Under Repair</option></select></label>
+          </div>
+          <div id="statusTabs" class="status-tabs"></div>
+        </div>
+        <div id="searchResults" class="record-list"></div>
+        <div id="searchEmpty" class="empty hidden">No assets match these filters.</div>
+      </section>
+
+      <!-- USERS -->
+      <section id="usersView" class="view hidden">
+        <div class="page-head">
+          <div><div class="eyebrow">ACCESS CONTROL</div><h1>Users & Rights</h1></div>
+          <button id="addUserBtn" class="primary">＋ Add Team Member</button>
+        </div>
+        <div id="userCards" class="user-cards"></div>
+      </section>
+
+      <!-- USAGE -->
+      <section id="usageView" class="view hidden">
+        <div class="page-head"><div><div class="eyebrow">STORAGE</div><h1>Usage</h1></div></div>
+        <div class="card usage-card">
+          <div class="usage-label"><strong id="usageText">0 MB of 10 GB</strong><span id="usagePercent">0%</span></div>
+          <div class="progress"><div id="usageBar" class="progress-fill"></div></div>
+          <p class="muted">Usage shown here is the photo storage used by this company. The 10 GB reference is the Cloudflare R2 free storage allowance configured for this project.</p>
+          <div class="usage-grid">
+            <div><span id="usagePhotos">0</span><small>Photos</small></div>
+            <div><span id="usageAssets">0</span><small>Asset rows</small></div>
+            <div><span id="usageBytes">0 MB</span><small>Photo storage</small></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- EDIT COMPANY -->
+      <section id="editCompanyView" class="view hidden">
+        <div class="page-head"><div><div class="eyebrow">COMPANY SETTINGS</div><h1>Edit Company</h1></div></div>
+        <div class="card">
+          <div class="grid two">
+            <label>Company Name *<input id="editCompanyName" /></label>
+            <label>Assignment Start Date *<input id="editCompanyStartDate" type="date" /></label>
+            <label>Company Code<input id="editCompanyCode" disabled /></label>
+          </div>
+          <button id="saveCompanyBtn" class="primary">Save Company Details</button>
+          <div class="danger-zone">
+            <h3>Danger Zone</h3>
+            <p>Deleting a company permanently deletes its users, verification records and photos.</p>
+            <button id="deleteCompanyBtn" class="danger">Delete Company</button>
+          </div>
+        </div>
       </section>
     </main>
   </div>
 
-  <div id="detailModal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-sheet">
-      <div class="modal-head">
-        <div><div class="eyebrow">NEW VERIFICATION PHOTO</div><h2>Add photo details</h2></div>
-        <button id="discardBtn" class="icon-btn" aria-label="Discard">✕</button>
-      </div>
-      <img id="preview" class="preview" alt="Captured asset" />
-      <div class="timestamp-box"><span id="capturedDate"></span><strong id="capturedTime"></strong></div>
-      <div class="location-snapshot" id="locationSnapshot"></div>
-
+  <!-- LOGIN MODAL -->
+  <div id="loginModal" class="modal hidden">
+    <div class="modal-sheet small-sheet">
+      <div class="modal-head"><div><div class="eyebrow">COMPANY LOGIN</div><h2 id="loginCompanyName">Company</h2></div><button class="icon-btn" data-close="loginModal">✕</button></div>
       <div class="form-stack">
-        <label>Sub-location *<input id="subLocation" autocomplete="off" placeholder="e.g. North wall / Reception desk / Cabin corner" /></label>
-        <label>Photo Clicked By *<select id="clickedBy"><option value="">Select team member</option></select></label>
-        <label>Remarks<textarea id="remarks" rows="3" placeholder="Optional remarks for this photo"></textarea></label>
+        <label>Username<input id="loginUsername" autocomplete="username" /></label>
+        <label>Password<input id="loginPassword" type="password" autocomplete="current-password" /></label>
       </div>
+      <button id="loginBtn" class="primary full">Login</button>
+      <button id="forgotPasswordBtn" class="link-btn">Forgot password?</button>
+    </div>
+  </div>
 
+  <!-- FORGOT PASSWORD MODAL -->
+  <div id="forgotModal" class="modal hidden">
+    <div class="modal-sheet small-sheet">
+      <div class="modal-head"><div><div class="eyebrow">PASSWORD RECOVERY</div><h2>Reset password</h2></div><button class="icon-btn" data-close="forgotModal">✕</button></div>
+      <div id="forgotStep1">
+        <p class="muted">A reset code will be sent to the recovery mailbox <strong>mahipal.office21@gmail.com</strong>.</p>
+        <label>Username<input id="forgotUsername" /></label>
+        <button id="sendResetBtn" class="primary full">Send Reset Code</button>
+      </div>
+      <div id="forgotStep2" class="hidden">
+        <div class="form-stack">
+          <label>6-digit Reset Code<input id="resetCode" inputmode="numeric" maxlength="6" /></label>
+          <label>New Password<input id="newPassword" type="password" /></label>
+        </div>
+        <button id="resetPasswordBtn" class="primary full">Set New Password</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PHOTO DETAIL MODAL -->
+  <div id="detailModal" class="modal hidden">
+    <div class="modal-sheet">
+      <div class="modal-head"><div><div class="eyebrow">NEW VERIFICATION PHOTO</div><h2>Add photo details</h2></div><button id="discardPhotoBtn" class="icon-btn">✕</button></div>
+      <img id="photoPreview" class="preview" alt="Verification photo" />
+      <div class="timestamp-box"><span id="capturedDate"></span><strong id="capturedTime"></strong></div>
+      <div id="locationSnapshot" class="location-snapshot"></div>
+      <div class="form-stack">
+        <label>Sub-location *<input id="subLocation" placeholder="e.g. North wall / workstation corner" /></label>
+        <label>Photo Clicked By *<select id="clickedBy"></select></label>
+        <label>Remarks<textarea id="remarks" rows="3" placeholder="Optional remarks"></textarea></label>
+      </div>
       <div class="assets-panel">
         <div class="assets-panel-head">
-          <div>
-            <div class="label-row"><h3>Assets visible in this photo</h3><span id="aiAssetBadge" class="ai-badge hidden">AI</span></div>
-            <span id="aiStatus" class="field-note"></span>
-          </div>
-          <button id="retryAiBtn" class="mini-btn ai-retry hidden" type="button">Retry AI</button>
+          <div><h3>Assets visible in this photo</h3><span id="aiStatus" class="field-note"></span></div>
+          <button id="retryAiBtn" class="secondary mini-btn">Retry AI</button>
         </div>
         <div id="assetRows" class="asset-rows"></div>
-        <button id="addAssetRowBtn" class="secondary full-inline" type="button">＋ Add Asset Row</button>
+        <button id="addAssetRowBtn" class="secondary full-inline">＋ Add Asset Row</button>
       </div>
-
-      <button id="saveRecordBtn" class="primary full">Save Photo</button>
+      <button id="savePhotoBtn" class="primary full">Save Photo</button>
     </div>
   </div>
 
-  <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-sheet small-sheet">
-      <div class="modal-head"><div><div class="eyebrow">SETTINGS</div><h2>Shared Team Settings</h2></div><button id="closeSettingsBtn" class="icon-btn">✕</button></div>
-      <p class="muted">Team names are saved centrally. Set them once and every teammate opening the same app link gets the same tabs automatically.</p>
-      <div class="form-stack">
-        <label>Member 1<input id="member1" autocomplete="off" placeholder="Name" /></label>
-        <label>Member 2<input id="member2" autocomplete="off" placeholder="Name" /></label>
-        <label>Member 3<input id="member3" autocomplete="off" placeholder="Name" /></label>
-        <div class="settings-divider"></div>
-        <label class="toggle-row">
-          <span><strong>AI multi-asset detection</strong><small>Detect asset names and quantities automatically from each photo.</small></span>
-          <input id="aiEnabled" type="checkbox" />
-        </label>
-        <div class="cloud-note"><strong>Cloud & AI server:</strong><span id="workerDisplay">Connected automatically</span></div>
-        <p class="security-note">The Worker URL is built into this app. Teammates do not need to paste it on another device.</p>
-      </div>
-      <button id="saveSettingsBtn" class="primary full">Save Team Settings</button>
-      <div class="ios-tip"><strong>Install on iPhone:</strong> Open the same GitHub Pages link in Safari → Share → Add to Home Screen.</div>
-    </div>
-  </div>
-
-  <div id="editModal" class="modal hidden" role="dialog" aria-modal="true">
+  <!-- EDIT RECORD MODAL -->
+  <div id="editRecordModal" class="modal hidden">
     <div class="modal-sheet">
-      <div class="modal-head"><div><div class="eyebrow">EDIT PHOTO</div><h2>Edit saved verification</h2></div><button id="closeEditBtn" class="icon-btn">✕</button></div>
-      <img id="editPreview" class="preview" alt="Asset" />
+      <div class="modal-head"><div><div class="eyebrow">EDIT VERIFICATION</div><h2>Edit saved photo</h2></div><button class="icon-btn" data-close="editRecordModal">✕</button></div>
+      <img id="editPreview" class="preview" alt="Verification photo" />
       <div class="form-stack">
-        <div class="grid two">
-          <label>Room Number *<input id="editRoom" /></label>
-          <label>Sub-location *<input id="editSubLocation" /></label>
-        </div>
+        <label>Room Number *<input id="editRoom" /></label>
+        <label>Sub-location *<input id="editSubLocation" /></label>
         <label>Photo Clicked By *<select id="editClickedBy"></select></label>
-        <label>Remarks<textarea id="editRemarks" rows="3" placeholder="Optional remarks"></textarea></label>
+        <label>Remarks<textarea id="editRemarks" rows="3"></textarea></label>
       </div>
       <div class="assets-panel">
-        <div class="assets-panel-head"><h3>Assets in photo</h3><button id="editAddAssetRowBtn" class="mini-btn" type="button">＋ Add</button></div>
+        <div class="assets-panel-head"><h3>Assets in photo</h3><button id="editAddAssetBtn" class="secondary mini-btn">＋ Add</button></div>
         <div id="editAssetRows" class="asset-rows"></div>
       </div>
-      <button id="saveEditBtn" class="primary full">Save Changes</button>
+      <button id="saveRecordEditBtn" class="primary full">Save Changes</button>
+    </div>
+  </div>
+
+  <!-- USER MODAL -->
+  <div id="userModal" class="modal hidden">
+    <div class="modal-sheet small-sheet">
+      <div class="modal-head"><div><div class="eyebrow">TEAM MEMBER</div><h2 id="userModalTitle">Add Team Member</h2></div><button class="icon-btn" data-close="userModal">✕</button></div>
+      <div class="form-stack">
+        <label>Full Name *<input id="userName" /></label>
+        <label>Username *<input id="userUsername" autocomplete="off" /></label>
+        <label>Password <input id="userPassword" type="password" autocomplete="new-password" /><small id="passwordHint">Required for a new user.</small></label>
+        <label>Role / Rights *<select id="userRole"><option value="VERIFIER">Verifier</option><option value="ADMIN">Admin</option></select></label>
+      </div>
+      <button id="saveUserBtn" class="primary full">Save User</button>
     </div>
   </div>
 

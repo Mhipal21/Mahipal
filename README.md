@@ -1,78 +1,28 @@
-# PV Capture — Physical Verification App v3
+# PRS.AssetVerify — Version 5
 
-An iPhone-friendly PWA for fast photo-based fixed-asset physical verification with AI-assisted multi-asset detection and Excel reporting.
+Version 5 is a fresh multi-company physical-verification PWA designed for iPhone/Safari and shared team use.
 
-## Capture workflow
+## Main workflow
 
-### Sticky fields — enter once, change only when needed
-1. City
-2. Area
-3. Building
-4. Floor Number
-5. Room Number
+1. Welcome page → **Create Company** or **Existing Company**.
+2. Each company is a separate workspace/tunnel with its own users, photos and records.
+3. Users login with a company-specific username/password and have either **Admin** or **Verifier** rights.
+4. Admin can manage users, edit/delete the company and delete verification photos.
+5. Verifier can capture, upload, edit, search, export and view shared records, but cannot delete photos or manage users/company settings.
+6. City, Area, Building, Floor and Room stay sticky until manually changed.
+7. Camera or gallery photos are compressed to approximately 1 MB or less before upload.
+8. OpenAI vision suggests all visible asset types and quantities; all suggestions remain editable.
+9. Each asset row includes quantity, condition, Found / Not Found / Pending status, not-found reason, serial number and barcode/asset tag.
+10. Search by location and filter by condition / Found status.
+11. Usage screen shows company photo storage against a 10 GB reference bar.
+12. Excel export includes embedded photos and all captured fields.
 
-### For each photo
-- Take a new photo with the rear camera **or upload from the iPhone gallery**.
-- Date and time are captured automatically.
-- Enter Sub-location.
-- Select which of the 3 team members clicked the photo.
-- Add optional Remarks.
-- AI can automatically detect multiple asset types and quantities from one photo.
-- Every AI-created asset row is editable.
-- You can add/delete asset rows manually.
-- Each asset row includes:
-  - Name of Asset
-  - Quantity
-  - Serial Number
-  - Barcode / Asset Tag
-  - Condition: Good / Fair / Poor / Damaged / Under Repair
-  - Not Found Reason: Missing / Disposed / Transferred / Stolen / Under Maintenance / Not applicable
+## Fresh start from Version 4
 
-Example: a cabin photo showing 3 chairs, 1 PC, 1 table and 1 AC can produce four editable rows automatically.
+Version 5 uses new D1 tables prefixed with `v5_`. Version 4 demo records are not shown in Version 5. Old Version 4 objects can be removed from R2 separately later if you want to reclaim the small amount of space they use.
 
-## Crash / refresh protection
-- Photos and records are saved in IndexedDB on the device before Excel export.
-- Saved records are grouped under **All + one tab for each team member**.
-- Records older than **30 days** are automatically deleted when the app opens.
-- The app requests persistent browser storage when iOS/browser support allows it.
-- Because website storage is still controlled by iOS, periodically export important work during very large verification exercises.
+## Password recovery
 
-## Excel output
-The Excel export contains:
-1. Sr No
-2. Photo
-3. City
-4. Area
-5. Building
-6. Floor Number
-7. Room Number
-8. Sub-location
-9. Name of Asset
-10. Quantity
-11. Serial Number
-12. Barcode / Asset Tag
-13. Condition
-14. Not Found Reason
-15. Remarks
-16. Clicked By
-17. Date
-18. Time
+Passwords are stored as salted PBKDF2 hashes, so the original password is deliberately not recoverable. **Forgot password** creates a 6-digit reset code and sends it to `mahipal.office21@gmail.com` when an email delivery binding/webhook is configured. This is safer than emailing the original password.
 
-If one photo contains several asset types, the Excel contains one row per asset type while the photo is shown once for that photo group.
-
-If a team-member tab is selected, **Export Excel** exports only that member's stored photos. The All tab exports everybody.
-
-## AI architecture
-Do not place your OpenAI API key in GitHub Pages. The public PWA sends a compressed photo to the included Cloudflare Worker, and the Worker securely calls OpenAI. See `AI_SETUP.md`.
-
-## Updating an existing GitHub Pages installation
-Replace these files in the repository root:
-- `index.html`
-- `app.js`
-- `styles.css`
-- `sw.js`
-
-Also replace the code in your Cloudflare Worker with:
-- `cloudflare-worker/worker.js`
-
-Existing saved records remain compatible; older single-asset records are automatically displayed as one asset row.
+See `V5_SETUP.md` for deployment steps.
